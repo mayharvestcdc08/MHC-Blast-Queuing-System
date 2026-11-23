@@ -3784,11 +3784,7 @@ function newRegistration() {
         );
 
 
-    document
-        .getElementById(
-            "truckNumber"
-        )
-        .focus();
+    const focusTarget = document.querySelector("#productEntries input") || document.getElementById("truckNumber"); if (focusTarget) focusTarget.focus();
 
 }
 
