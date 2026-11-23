@@ -2539,6 +2539,7 @@ setInterval(function() { if (typeof updateClock === "function") updateClock(); }
 <datalist id="availableProductList"></datalist>
 </div>
 <div class="form-group"><label for="recorderChecker">Blast Receiver/Recorder *</label><input id="recorderChecker" type="text" placeholder="Enter blast receiver/recorder name" required autocomplete="off"></div>
+<div class="form-group"><label for="trfNumber">TRF # <small style="color:#64748b;font-weight:normal">(Manual entry)</small></label><input id="trfNumber" type="text" placeholder="e.g., TRF-1024" autocomplete="off"></div>
 <div class="form-group"><label for="forLayer">Layer Status *</label><select id="forLayer" required><option value="No">Not for Layer</option><option value="Yes">For Layer</option></select></div>
 <div class="form-group"><label for="priority">Prioritization *</label><select id="priority" required><option value="FSI">FSI</option><option value="CCM">CCM</option><option value="Branded">Branded</option><option value="Unbranded">Unbranded</option><option value="Aged">Aged</option><option value="Repro">Repro</option></select></div>
 <div class="form-group full"><button class="btn-primary big-button" type="submit">ADD PRODUCT TO QUEUE</button></div>
@@ -3692,6 +3693,7 @@ document.getElementById("registrationForm").addEventListener("submit", function(
     const queueShift = document.getElementById("queueShift").value;
     const dateShift = queueDate + " / " + queueShift;
     const recorderChecker = document.getElementById("recorderChecker").value.trim();
+    const trfNumber = (document.getElementById("trfNumber")?.value || "").trim();
     const priority = document.getElementById("priority").value;
 
     const products = Array.from(document.querySelectorAll("#productEntries .product-entry")).map(row => {
@@ -3777,7 +3779,7 @@ document.getElementById("registrationForm").addEventListener("submit", function(
         product: products.map(p => p.product).join(", "),
         volume: products.map(p => p.product + ": " + p.volume).join("; "),
         productionDate: products.map(p => p.product + ": " + p.productionDate).join("; "),
-        recorderChecker, priority, isForLayer: document.getElementById("forLayer").value === "Yes",
+        recorderChecker, trfNumber, priority, isForLayer: document.getElementById("forLayer").value === "Yes",
         arrival: now.toLocaleTimeString(), arrivalTimestamp: now.toISOString(), status: "Waiting", queueStarted: true, queueStartedAt: now.toISOString(),
         blastActivities: initialBlastActivities, splitCount: 0,
         truckNumber: products.map(p => p.product).join(", "), driverName: recorderChecker,
@@ -3794,7 +3796,7 @@ document.getElementById("registrationForm").addEventListener("submit", function(
     document.getElementById("newTicketInfo").innerHTML = "<strong>Queue:</strong> " + escapeHTML(record.queue) +
         "<br><strong>Products in this queue:</strong><br>" + products.map(p => escapeHTML(p.product) +
         " — " + escapeHTML(p.volume) + " — Production: " + escapeHTML(p.productionDate)).join("<br>") +
-        "<br><strong>Prioritization:</strong> " + escapeHTML(priority) + "<br><strong>Date:</strong> " + escapeHTML(queueDate) + "<br><strong>Shift:</strong> " + escapeHTML(queueShift) +
+        (record.trfNumber ? "<br><strong>TRF #:</strong> " + escapeHTML(record.trfNumber) : "") + "<br><strong>Prioritization:</strong> " + escapeHTML(priority) + "<br><strong>Date:</strong> " + escapeHTML(queueDate) + "<br><strong>Shift:</strong> " + escapeHTML(queueShift) +
         "<br><strong>Blast Receiver/Recorder:</strong> " + escapeHTML(recorderChecker);
     document.getElementById("registrationSuccess").classList.add("show");
     window.lastRegisteredTruck = record;
@@ -5869,6 +5871,17 @@ renderBlastInventory();
 const BLAST_ACTIVITY_NAMES = ["Barcode Scanning (Fresh Input)", "Layering", "Transfer to Blast Freezing Room", "Blast Freezing", "Harvesting", "Barcoding Weighing (Frozen Output)"];
 let activeBlastActivityId = null;
 function getBlastActivities(truck) { if (!truck.blastActivities || !Array.isArray(truck.blastActivities)) truck.blastActivities = BLAST_ACTIVITY_NAMES.map(name => ({name,start:"",end:"",remarks:"",manning:"",recorder:"",blastSupervisor:""})); return truck.blastActivities; }
+function updateTruckTrf(truckId, value) {
+  const truck = trucks.find(t => String(t.id) === String(truckId));
+  if (!truck) return;
+  const val = String(value || '').trim();
+  if (truck.trfNumber !== val) {
+    truck.trfNumber = val;
+    saveData();
+    console.log('[MHC] Updated TRF # for queue ' + truck.queue + ': ' + val);
+  }
+}
+
 function renderBlastActivityControls(truck) {
  const acts = getBlastActivities(truck);
  const specs = [
@@ -5878,7 +5891,11 @@ function renderBlastActivityControls(truck) {
   {i:4,label:"Harvesting"},
   {i:5,label:"Barcode Weighing"}
  ];
- let html = '<div style="display:flex;flex-wrap:wrap;gap:5px;min-width:240px;margin:5px 0">';
+ let html = '<div style="margin:4px 0 6px;display:flex;align-items:center;gap:6px;background:#f8fafc;padding:3px 8px;border-radius:6px;border:1px solid #cbd5e1;width:fit-content;">' +
+   '<label style="font-size:11px;font-weight:800;color:#1e293b;margin:0;">TRF #:</label>' +
+   '<input type="text" value="' + escapeHTML(truck.trfNumber || '') + '" placeholder="Type TRF #" style="height:26px;width:115px;font-size:12px;font-weight:700;padding:2px 6px;border:1px solid #94a3b8;border-radius:4px;background:#fff;color:#0f172a;" onchange="updateTruckTrf(\'' + String(truck.id) + '\', this.value)" onblur="updateTruckTrf(\'' + String(truck.id) + '\', this.value)" title="Transfer Request Form #">' +
+   '</div>';
+ html += '<div style="display:flex;flex-wrap:wrap;gap:5px;min-width:240px;margin:5px 0">';
  for (const spec of specs) {
   const a = acts[spec.i] || {start:"",end:""};
   // Blast Freezing End is recorded automatically by the dashboard's Complete button,
@@ -5936,7 +5953,7 @@ function stampBlastActivity(truckId, activityIndex, side) {
 }
 function openBlastActivity(id) {
  const truck = trucks.find(t => t.id === id); if (!truck) return; activeBlastActivityId = id;
- document.getElementById("blastActivityQueueLabel").textContent = `Queue ${truck.queue || "-"} · ${truck.product || truck.loadType || "Product"} · ${truck.assignedBlast || "Not assigned"}`;
+ document.getElementById("blastActivityQueueLabel").textContent = `Queue ${truck.queue || "-"} · TRF #: ${truck.trfNumber || "—"} · ${truck.product || truck.loadType || "Product"} · ${truck.assignedBlast || "Not assigned"}`;
  const activities = getBlastActivities(truck);
  document.getElementById("blastActivityRows").innerHTML = activities.map((a,i)=>`<tr><td style="min-width:160px;font-weight:700">${escapeHTML(a.name || BLAST_ACTIVITY_NAMES[i])}</td><td><input type="datetime-local" id="blastActStart_${i}" value="${escapeHTML(a.start||"")}" style="min-width:180px" disabled title="Timestamp is recorded automatically and cannot be edited"></td><td><input type="datetime-local" id="blastActEnd_${i}" value="${escapeHTML(a.end||"")}" style="min-width:180px" disabled title="Timestamp is recorded automatically and cannot be edited"></td><td id="blastActDuration_${i}" style="min-width:75px">${blastActivityDuration(a.start,a.end)}</td><td><input id="blastActRemarks_${i}" value="${escapeHTML(a.remarks||"")}" style="min-width:120px"></td><td><input id="blastActManning_${i}" value="${escapeHTML(a.manning||"")}" style="min-width:100px"></td><td><input id="blastActRecorder_${i}" value="${escapeHTML(a.recorder||"")}" style="min-width:140px"></td><td><input id="blastActSupervisor_${i}" value="${escapeHTML(a.blastSupervisor||"")}" style="min-width:140px" placeholder="Blast Supervisor"></td></tr>`).join("");
  BLAST_ACTIVITY_NAMES.forEach((_,i)=>["Start","End"].forEach(side=>document.getElementById(`blastAct${side}_${i}`).addEventListener("change",()=>{document.getElementById(`blastActDuration_${i}`).textContent=blastActivityDuration(document.getElementById(`blastActStart_${i}`).value,document.getElementById(`blastActEnd_${i}`).value);} )));
