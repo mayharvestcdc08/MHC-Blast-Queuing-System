@@ -4440,7 +4440,7 @@ function renderQueue() {
                         <td><strong>${escapeHTML(truck.queueShift || ((truck.dateShift || truck.company || "").split(" / ")[1]) || "-")}</strong></td>
                         <td>${escapeHTML(truck.product || truck.loadType || "-")}</td>
                         <td>${volumeCellHTML(truck)}</td>
-                        <td>${truck.productTemperature !== undefined && truck.productTemperature !== "" ? escapeHTML(truck.productTemperature) + " °C" : "-"}</td>
+                        <td>${(truck.productTemperature && !String(truck.productTemperature).includes("undefined")) ? escapeHTML(String(truck.productTemperature).replace(/\s*°C\s*$/i, "")) + " °C" : "—"}</td>
                         <td>${escapeHTML(truck.productionDate || truck.destination || "-")}</td>
                         <td>${escapeHTML(truck.recorderChecker || truck.driverName || "-")}</td>
                         <td>${truck.isForLayer ? "YES" : "—"}</td>
@@ -4564,7 +4564,7 @@ function allocateToBlast(id) {
         products: childProducts,
         product: names.join(", "),
         volume: childProducts.map(p => p.product + ": " + p.volume).join("; "),
-        productTemperature: childProducts.map(p => p.product + ": " + p.productTemperature + "°C").join("; "),
+        productTemperature: childProducts.map(p => p.product + (p.productTemperature ? ": " + p.productTemperature + "°C" : "")).filter(Boolean).join("; "),
         productionDate: childProducts.map(p => p.product + ": " + p.productionDate).join("; "),
         recorderChecker: parent.recorderChecker, priority: parent.priority, isForLayer: parent.isForLayer,
         arrival: parent.arrival, arrivalTimestamp: parent.arrivalTimestamp,
