@@ -1,0 +1,19 @@
+{
+  "name": "mhc-blast-queuing-system",
+  "version": "1.0.0",
+  "description": "May Harvest Corporation - Product Queuing & Blast Freezing Management System with Real-Time Cloud Sync & 30-Day Reports",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "mhc",
+    "may-harvest",
+    "blast-freezing",
+    "queuing-system",
+    "cold-storage",
+    "haccp"
+  ],
+  "author": "May Harvest Corporation",
+  "license": "ISC"
+}

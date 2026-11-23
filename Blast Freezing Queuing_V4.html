@@ -1548,8 +1548,702 @@ tr:hover {
 
 }
 
+
+/* =========================================================
+   EXTENDED 30-DAY REPORT & SYNC STYLES
+========================================================= */
+.ext-range-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 700;
+  border: 1px solid #cbd5e1;
+  background: #ffffff;
+  color: #334155;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.ext-range-btn:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+}
+.ext-range-btn.active {
+  background: #0284c7;
+  color: #ffffff;
+  border-color: #0284c7;
+  box-shadow: 0 1px 3px rgba(2, 132, 199, 0.3);
+}
+
+.ext-badge {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+}
+
+.ext-badge.waiting { background: #fef08a; color: #854d0e; }
+.ext-badge.loading { background: #bae6fd; color: #0369a1; }
+.ext-badge.freezing { background: #bfdbfe; color: #1d4ed8; }
+.ext-badge.harvested { background: #bbf7d0; color: #15803d; }
+.ext-badge.completed { background: #bbf7d0; color: #15803d; }
+.ext-badge.cancelled { background: #fecaca; color: #b91c1c; }
+
+@media print {
+  header, .navbar, .registration-container > div:first-child > div:last-child, #extendedReports .ext-range-btn, #extendedReports input, #extendedReports select {
+    display: none !important;
+  }
+  body, .container, .screen.active {
+    background: #fff !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: none !important;
+  }
+}
+
 </style>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">
+/* =========================================================
+   MHC REAL-TIME CLOUD DATABASE & ONLINE TIME ENGINE
+========================================================= */
+const SUPABASE_URL = 'https://svquyjpguhrmhzbgynsw.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_J6udCVSr_aA2_LYp5QcSGQ_hMFu_wMA';
+let supabaseClient = null;
+
+try {
+  if (window.supabase && window.supabase.createClient) {
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    console.log('[MHC] Supabase Blast Queuing Cloud Sync initialized!');
+  }
+} catch(e) {
+  console.warn('[MHC] Supabase init warning:', e);
+}
+
+let serverTimeOffsetMs = 0;
+let isCloudSyncing = false;
+let cloudSyncTimer = null;
+let currentReportRange = '30days';
+
+// Online PST (Asia/Manila, UTC+8) Time Engine
+async function syncOnlineTime() {
+  try {
+    const t0 = performance.now();
+    const res = await fetch('/api/time', { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      const latency = (performance.now() - t0) / 2;
+      serverTimeOffsetMs = (data.serverTime + latency) - Date.now();
+      updatePstBadge(true);
+      return;
+    }
+  } catch(e) {}
+
+  // Fallback to WorldTimeAPI
+  try {
+    const res = await fetch('https://worldtimeapi.org/api/timezone/Asia/Manila', { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      const remoteMs = new Date(data.datetime).getTime();
+      serverTimeOffsetMs = remoteMs - Date.now();
+      updatePstBadge(true);
+      return;
+    }
+  } catch(e2) {}
+
+  updatePstBadge(false);
+}
+
+function updatePstBadge(isOnline) {
+  const el = document.getElementById('pstBadge');
+  if (!el) return;
+  if (isOnline) {
+    el.innerHTML = '🇵🇭 Online PST (UTC+8)';
+    el.style.background = '#e0f2fe';
+    el.style.color = '#0369a1';
+    el.style.borderColor = '#bae6fd';
+  } else {
+    el.innerHTML = '🕒 Local Time';
+    el.style.background = '#fef3c7';
+    el.style.color = '#92400e';
+    el.style.borderColor = '#fde68a';
+  }
+}
+
+function getPSTNow() {
+  return new Date(Date.now() + serverTimeOffsetMs);
+}
+
+// Override todayString with accurate PST date
+function todayString() {
+  const now = getPSTNow();
+  try {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Manila',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(now);
+  } catch(e) {
+    const d = new Date(now.getTime() + 8 * 3600 * 1000);
+    return d.toISOString().slice(0, 10);
+  }
+}
+
+// Override updateClock to show accurate PST
+function updateClock() {
+  const now = getPSTNow();
+  const clockEl = document.getElementById("clock");
+  if (!clockEl) return;
+  try {
+    const options = {
+      timeZone: 'Asia/Manila',
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    };
+    clockEl.textContent = new Intl.DateTimeFormat('en-US', options).format(now);
+  } catch(e) {
+    clockEl.textContent = now.toLocaleString();
+  }
+}
+
+function setSyncBadge(status, text) {
+  const el = document.getElementById("syncBadge");
+  if (!el) return;
+  if (status === "synced") {
+    el.textContent = "🟢 " + (text || "Cloud Synced");
+    el.style.background = "#dcfce7";
+    el.style.color = "#15803d";
+    el.style.borderColor = "#bbf7d0";
+  } else if (status === "syncing") {
+    el.textContent = "🟡 " + (text || "Syncing...");
+    el.style.background = "#fef9c3";
+    el.style.color = "#854d0e";
+    el.style.borderColor = "#fef08a";
+  } else {
+    el.textContent = "🔴 " + (text || "Local Storage Only");
+    el.style.background = "#fee2e2";
+    el.style.color = "#b91c1c";
+    el.style.borderColor = "#fecaca";
+  }
+}
+
+function getFullCloudPayload() {
+  return {
+    trucks: trucks,
+    queueNumber: queueNumber,
+    queueDate: localStorage.getItem(DATE_KEY) || todayString(),
+    inventory: getBlastInventory(),
+    inventoryHistory: getBlastHistory(),
+    activityRows: getActivityRows(),
+    lastUpdated: new Date().toISOString()
+  };
+}
+
+function triggerCloudSync() {
+  clearTimeout(cloudSyncTimer);
+  cloudSyncTimer = setTimeout(pushCloudSync, 450);
+}
+
+async function pushCloudSync() {
+  if (isCloudSyncing) return;
+  isCloudSyncing = true;
+  setSyncBadge("syncing", "Saving to cloud...");
+
+  const payload = getFullCloudPayload();
+  let saved = false;
+
+  // 1. Supabase Cloud Sync
+  if (supabaseClient) {
+    try {
+      const { error } = await supabaseClient.from('party_sync').upsert({
+        room: 'mhc_blast_queuing',
+        data: payload,
+        updated_at: new Date().toISOString()
+      });
+      if (!error) saved = true;
+      else console.warn('[MHC] Supabase sync returned error:', error);
+    } catch(err) {
+      console.warn('[MHC] Supabase sync push exception:', err);
+    }
+  }
+
+  // 2. Local/Render Server Sync
+  try {
+    const res = await fetch('/api/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (res.ok) saved = true;
+  } catch(e) {}
+
+  isCloudSyncing = false;
+  if (saved) {
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    setSyncBadge("synced", `Cloud Synced (${timeStr})`);
+  } else {
+    setSyncBadge("synced", "Saved Locally");
+  }
+}
+
+function applyIncomingCloudData(cloudData) {
+  if (!cloudData) return;
+  let changed = false;
+
+  // 1. Trucks Merge
+  if (Array.isArray(cloudData.trucks)) {
+    const map = new Map();
+    trucks.forEach(t => map.set(t.id || `${t.date}_${t.queue}_${t.product}`, t));
+    cloudData.trucks.forEach(t => {
+      const key = t.id || `${t.date}_${t.queue}_${t.product}`;
+      if (!map.has(key)) {
+        map.set(key, t);
+        changed = true;
+      } else {
+        const local = map.get(key);
+        // Merge latest progress
+        if (local.status !== t.status || local.blast !== t.blast || (t.freezingTemps && t.freezingTemps.length !== (local.freezingTemps||[]).length)) {
+          map.set(key, { ...local, ...t });
+          changed = true;
+        }
+      }
+    });
+    if (changed) {
+      trucks = Array.from(map.values());
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(trucks));
+    }
+  }
+
+  // 2. Inventory Merge
+  if (Array.isArray(cloudData.inventory)) {
+    const localInv = getBlastInventory();
+    if (JSON.stringify(localInv) !== JSON.stringify(cloudData.inventory)) {
+      saveBlastInventory(cloudData.inventory);
+      changed = true;
+    }
+  }
+
+  // 3. Queue Number
+  if (cloudData.queueDate === todayString() && typeof cloudData.queueNumber === 'number' && cloudData.queueNumber > queueNumber) {
+    queueNumber = cloudData.queueNumber;
+    localStorage.setItem(QUEUE_KEY, queueNumber);
+    changed = true;
+  }
+
+  if (changed) {
+    updateStats();
+    renderQueue();
+    renderForBlastInventory();
+    renderBlastInventory();
+    renderBlastHistory();
+    if (document.getElementById("extendedReports") && document.getElementById("extendedReports").classList.contains("active")) {
+      renderExtendedReports();
+    }
+    if (document.getElementById("liveBoard") && document.getElementById("liveBoard").classList.contains("active")) {
+      renderLiveBlastBoard();
+    }
+  }
+}
+
+async function pullCloudSync() {
+  setSyncBadge("syncing", "Loading cloud data...");
+  let loaded = false;
+
+  // 1. Fetch from Supabase
+  if (supabaseClient) {
+    try {
+      const { data, error } = await supabaseClient
+        .from('party_sync')
+        .select('data')
+        .eq('room', 'mhc_blast_queuing')
+        .maybeSingle();
+
+      if (!error && data && data.data) {
+        applyIncomingCloudData(data.data);
+        loaded = true;
+      }
+    } catch(err) {
+      console.warn('[MHC] Supabase pull exception:', err);
+    }
+  }
+
+  // 2. Fetch from Local/Render Server
+  try {
+    const res = await fetch('/api/sync', { cache: 'no-store' });
+    if (res.ok) {
+      const sData = await res.json();
+      applyIncomingCloudData(sData);
+      loaded = true;
+    }
+  } catch(e) {}
+
+  if (loaded) {
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    setSyncBadge("synced", `Cloud Synced (${timeStr})`);
+  } else {
+    setSyncBadge("synced", "Saved Locally");
+  }
+}
+
+function initRealtimeSubscription() {
+  if (!supabaseClient) return;
+  try {
+    supabaseClient
+      .channel('mhc_blast_channel')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'party_sync', filter: 'room=eq.mhc_blast_queuing' },
+        payload => {
+          if (payload && payload.new && payload.new.data) {
+            console.log('[MHC] Realtime broadcast received!');
+            applyIncomingCloudData(payload.new.data);
+          }
+        }
+      )
+      .subscribe();
+  } catch(e) {
+    console.warn('[MHC] Realtime subscribe error:', e);
+  }
+}
+
+// Wrap existing saveData to also sync to cloud
+const _originalSaveData = saveData;
+saveData = function() {
+  _originalSaveData();
+  triggerCloudSync();
+};
+
+/* =========================================================
+   30-DAY & EXTENDED HISTORICAL REPORTS ENGINE
+========================================================= */
+
+function setExtendedReportRange(range) {
+  currentReportRange = range;
+  document.querySelectorAll('.ext-range-btn').forEach(b => b.classList.remove('active'));
+  
+  const now = getPSTNow();
+  const startInp = document.getElementById('extReportStartDate');
+  const endInp = document.getElementById('extReportEndDate');
+  
+  const toStr = d => {
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  };
+
+  const endD = new Date(now);
+  let startD = new Date(now);
+
+  if (range === 'today') {
+    const btn = document.getElementById('btnRangeToday');
+    if (btn) btn.classList.add('active');
+  } else if (range === '7days') {
+    startD.setDate(startD.getDate() - 6);
+    const btn = document.getElementById('btnRange7');
+    if (btn) btn.classList.add('active');
+  } else if (range === '30days') {
+    startD.setDate(startD.getDate() - 29);
+    const btn = document.getElementById('btnRange30');
+    if (btn) btn.classList.add('active');
+  } else if (range === '60days') {
+    startD.setDate(startD.getDate() - 59);
+    const btn = document.getElementById('btnRange60');
+    if (btn) btn.classList.add('active');
+  } else if (range === 'all') {
+    startD = new Date(2025, 0, 1);
+    const btn = document.getElementById('btnRangeAll');
+    if (btn) btn.classList.add('active');
+  }
+
+  if (startInp) startInp.value = toStr(startD);
+  if (endInp) endInp.value = toStr(endD);
+
+  renderExtendedReports();
+}
+
+function onExtendedFilterChange() {
+  document.querySelectorAll('.ext-range-btn').forEach(b => b.classList.remove('active'));
+  renderExtendedReports();
+}
+
+function getFilteredExtendedTrucks() {
+  const startVal = document.getElementById('extReportStartDate')?.value || '';
+  const endVal = document.getElementById('extReportEndDate')?.value || '';
+  const statusVal = document.getElementById('extReportStatus')?.value || 'ALL';
+  const blastVal = document.getElementById('extReportBlast')?.value || 'ALL';
+  const searchVal = (document.getElementById('extReportSearch')?.value || '').trim().toLowerCase();
+
+  return trucks.filter(t => {
+    const tDate = t.date || (t.arrivalTimestamp ? t.arrivalTimestamp.slice(0, 10) : '');
+    if (startVal && tDate && tDate < startVal) return false;
+    if (endVal && tDate && tDate > endVal) return false;
+
+    // Status filter
+    if (statusVal !== 'ALL') {
+      if (statusVal === 'Harvested') {
+        if (t.status !== 'Harvested' && t.status !== 'Completed' && t.status !== 'Departed') return false;
+      } else if (statusVal === 'In Blast') {
+        if (t.status !== 'In Blast' && t.status !== 'Freezing') return false;
+      } else if (t.status !== statusVal) {
+        return false;
+      }
+    }
+
+    // Blast filter
+    if (blastVal !== 'ALL') {
+      if ((t.blast || '') !== blastVal) return false;
+    }
+
+    // Keyword search
+    if (searchVal) {
+      const qStr = String(t.queue || '');
+      const prodStr = String(t.product || '').toLowerCase();
+      const recStr = String(t.recorderChecker || t.driverName || '').toLowerCase();
+      const prioStr = String(t.priority || '').toLowerCase();
+      if (!qStr.includes(searchVal) && !prodStr.includes(searchVal) && !recStr.includes(searchVal) && !prioStr.includes(searchVal)) {
+        return false;
+      }
+    }
+
+    return true;
+  }).sort((a, b) => {
+    // Newest first by date and queue
+    const da = a.date || '';
+    const db = b.date || '';
+    if (da !== db) return da > db ? -1 : 1;
+    return (b.queue || 0) - (a.queue || 0);
+  });
+}
+
+function renderExtendedReports() {
+  const tbody = document.getElementById('extReportTableBody');
+  if (!tbody) return;
+
+  const list = getFilteredExtendedTrucks();
+
+  // Compute KPIs
+  const total = list.length;
+  const harvested = list.filter(t => t.status === 'Harvested' || t.status === 'Completed' || t.status === 'Departed').length;
+  const inBlast = list.filter(t => t.status === 'In Blast' || t.status === 'Freezing' || t.status === 'Loading').length;
+  
+  // Total volume parsed
+  let totalKg = 0;
+  let durationSumMs = 0;
+  let durationCount = 0;
+
+  list.forEach(t => {
+    if (Array.isArray(t.products)) {
+      t.products.forEach(p => {
+        const v = parseQueueVolume(p.volume);
+        if (v && v.amount) totalKg += v.amount;
+      });
+    } else if (t.volume) {
+      const v = parseQueueVolume(t.volume);
+      if (v && v.amount) totalKg += v.amount;
+    }
+
+    // Cycle duration
+    if (t.loadingStart && t.harvestedAt) {
+      const ms = new Date(t.harvestedAt).getTime() - new Date(t.loadingStart).getTime();
+      if (ms > 0 && ms < 72 * 3600 * 1000) {
+        durationSumMs += ms;
+        durationCount++;
+      }
+    }
+  });
+
+  const avgMinutes = durationCount > 0 ? Math.round((durationSumMs / durationCount) / 60000) : 0;
+  const avgDurationStr = avgMinutes > 0 ? `${Math.floor(avgMinutes / 60)}h ${avgMinutes % 60}m` : '—';
+
+  // Update KPI Elements
+  const kpiTotal = document.getElementById('kpiTotalBatches');
+  const kpiHarv = document.getElementById('kpiHarvestedBatches');
+  const kpiHarvPct = document.getElementById('kpiHarvestedPct');
+  const kpiAct = document.getElementById('kpiActiveBatches');
+  const kpiVol = document.getElementById('kpiTotalVolume');
+  const kpiAvg = document.getElementById('kpiAvgDuration');
+  const kpiRange = document.getElementById('kpiDateRangeLabel');
+
+  if (kpiTotal) kpiTotal.textContent = total.toLocaleString();
+  if (kpiHarv) kpiHarv.textContent = harvested.toLocaleString();
+  if (kpiHarvPct) kpiHarvPct.textContent = total > 0 ? `${Math.round((harvested / total) * 100)}% completion` : '0% completion';
+  if (kpiAct) kpiAct.textContent = inBlast.toLocaleString();
+  if (kpiVol) kpiVol.textContent = `${totalKg.toLocaleString()} kg`;
+  if (kpiAvg) kpiAvg.textContent = avgDurationStr;
+
+  const startVal = document.getElementById('extReportStartDate')?.value || '';
+  const endVal = document.getElementById('extReportEndDate')?.value || '';
+  if (kpiRange) kpiRange.textContent = startVal && endVal ? `${startVal} to ${endVal}` : 'All time records';
+
+  // Populate Table Rows
+  if (list.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center; padding:32px; color:#64748b; font-size:14px;">No product queuing records found for this period.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = list.map(t => {
+    const qBadge = `<b style="font-size:14px; color:#0f172a;">#${t.queue || '--'}</b>`;
+    const dtStr = `<div><b>${escapeHTML(t.date || '')}</b><br><small style="color:#64748b;">${escapeHTML(t.queueShift || t.dateShift || '')}</small></div>`;
+    
+    // Products
+    let prodsHtml = '';
+    if (Array.isArray(t.products) && t.products.length > 0) {
+      prodsHtml = t.products.map(p => `<div><b>${escapeHTML(p.product)}</b> <small style="color:#64748b;">(Prod: ${escapeHTML(p.productionDate || '—')})</small></div>`).join('');
+    } else {
+      prodsHtml = `<div><b>${escapeHTML(t.product || '—')}</b><br><small style="color:#64748b;">${escapeHTML(t.productionDate || '')}</small></div>`;
+    }
+
+    // Status class
+    const st = t.status || 'Waiting';
+    let stCls = 'waiting';
+    if (st === 'In Blast' || st === 'Freezing') stCls = 'freezing';
+    else if (st === 'Loading') stCls = 'loading';
+    else if (st === 'Harvested' || st === 'Completed') stCls = 'harvested';
+    else if (st === 'Cancelled') stCls = 'cancelled';
+
+    // Temps
+    let tempStr = '—';
+    if (Array.isArray(t.freezingTemps) && t.freezingTemps.length > 0) {
+      const last = t.freezingTemps[t.freezingTemps.length - 1];
+      tempStr = `<span style="font-weight:700; color:${Number(last.temp) <= -18 ? '#15803d' : '#dc2626'}">${last.temp}°C</span> <small style="color:#64748b;">(${last.time||''})</small>`;
+    } else if (t.productTemperature) {
+      tempStr = `${escapeHTML(t.productTemperature)}`;
+    }
+
+    // Cycle duration
+    let cycleStr = '—';
+    if (t.loadingStart && t.harvestedAt) {
+      const ms = new Date(t.harvestedAt).getTime() - new Date(t.loadingStart).getTime();
+      if (ms > 0) {
+        const m = Math.floor(ms / 60000);
+        cycleStr = `${Math.floor(m / 60)}h ${m % 60}m`;
+      }
+    } else if (t.loadingStart) {
+      const ms = Date.now() - new Date(t.loadingStart).getTime();
+      if (ms > 0) {
+        const m = Math.floor(ms / 60000);
+        cycleStr = `<span style="color:#0284c7;">${Math.floor(m / 60)}h ${m % 60}m (running)</span>`;
+      }
+    }
+
+    return `
+      <tr style="border-bottom:1px solid #f1f5f9; hover:background:#f8fafc;">
+        <td style="padding:10px 12px;">${qBadge}</td>
+        <td style="padding:10px 12px;">${dtStr}</td>
+        <td style="padding:10px 12px;">${prodsHtml}</td>
+        <td style="padding:10px 12px; font-weight:600; color:#334155;">${escapeHTML(t.volume || '—')}</td>
+        <td style="padding:10px 12px;">${priorityBadge(t.priority || 'Branded')}</td>
+        <td style="padding:10px 12px; font-weight:700; color:#0f172a;">${escapeHTML(t.blast || 'Pending')}</td>
+        <td style="padding:10px 12px;">${tempStr}</td>
+        <td style="padding:10px 12px;"><span class="ext-badge ${stCls}">${escapeHTML(st)}</span></td>
+        <td style="padding:10px 12px; font-weight:600;">${cycleStr}</td>
+        <td style="padding:10px 12px; color:#475569;">${escapeHTML(t.recorderChecker || t.driverName || '—')}</td>
+        <td style="padding:10px 12px;">
+          <button type="button" class="btn-secondary" onclick="printTicket('${t.id}')" style="padding:4px 8px; font-size:11.5px; border-radius:4px;" title="Print official ticket">🎫 Ticket</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function exportExtendedReportCSV() {
+  const list = getFilteredExtendedTrucks();
+  if (list.length === 0) {
+    alert("No records to export for the selected filter.");
+    return;
+  }
+
+  const headers = [
+    "Queue Number",
+    "Date",
+    "Shift",
+    "Products",
+    "Production Dates",
+    "Volumes",
+    "Product Temperature",
+    "Priority",
+    "Blast Freezer",
+    "Status",
+    "Arrival Time",
+    "Loading Start",
+    "Harvested At",
+    "Cycle Duration (Minutes)",
+    "Latest Freezing Temp",
+    "Receiver / Recorder"
+  ];
+
+  const rows = list.map(t => {
+    let prods = t.product || '';
+    let prodDates = t.productionDate || '';
+    let vols = t.volume || '';
+    if (Array.isArray(t.products)) {
+      prods = t.products.map(p => p.product).join('; ');
+      prodDates = t.products.map(p => p.productionDate).join('; ');
+      vols = t.products.map(p => p.volume).join('; ');
+    }
+
+    let cycleMins = '';
+    if (t.loadingStart && t.harvestedAt) {
+      const ms = new Date(t.harvestedAt).getTime() - new Date(t.loadingStart).getTime();
+      if (ms > 0) cycleMins = Math.round(ms / 60000);
+    }
+
+    let lastTemp = '';
+    if (Array.isArray(t.freezingTemps) && t.freezingTemps.length > 0) {
+      lastTemp = t.freezingTemps[t.freezingTemps.length - 1].temp + '°C';
+    }
+
+    return [
+      t.queue || '',
+      t.date || '',
+      t.queueShift || t.dateShift || '',
+      prods,
+      prodDates,
+      vols,
+      t.productTemperature || '',
+      t.priority || '',
+      t.blast || '',
+      t.status || '',
+      t.arrival || '',
+      t.loadingStart || '',
+      t.harvestedAt || '',
+      cycleMins,
+      lastTemp,
+      t.recorderChecker || t.driverName || ''
+    ];
+  });
+
+  const csvContent = "\ufeff" + [headers, ...rows]
+    .map(row => row.map(cell => '"' + String(cell == null ? '' : cell).replace(/"/g, '""') + '"').join(','))
+    .join('\r\n');
+
+  const startVal = document.getElementById('extReportStartDate')?.value || 'start';
+  const endVal = document.getElementById('extReportEndDate')?.value || 'end';
+  const filename = `MHC_Blast_Queuing_Report_${startVal}_to_${endVal}.csv`;
+
+  downloadFile(csvContent, filename, 'text/csv;charset=utf-8;');
+}
+
+function printExtendedReportPDF() {
+  window.print();
+}
+
+// Auto-initialize Cloud Sync and Online Time on window load
+window.addEventListener('DOMContentLoaded', () => {
+  syncOnlineTime();
+  setInterval(syncOnlineTime, 60000);
+  pullCloudSync();
+  initRealtimeSubscription();
+  setExtendedReportRange('30days');
+});
+
+</script>
 </head>
 
 
@@ -1594,7 +2288,15 @@ tr:hover {
     </div>
 
 
-    <div id="clock"></div>
+    
+    <div style="display:flex; flex-direction:column; align-items:flex-end; gap:6px;">
+      <div id="clock" style="font-weight:700; color:#0f172a; font-size:14px;"></div>
+      <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <span id="pstBadge" style="font-size:11px; padding:3px 8px; border-radius:12px; background:#e0f2fe; color:#0369a1; font-weight:700; border:1px solid #bae6fd;" title="Synchronized with Philippine Standard Time (UTC+8)">🇵🇭 Online PST</span>
+        <span id="syncBadge" style="font-size:11px; padding:3px 8px; border-radius:12px; background:#dcfce7; color:#15803d; font-weight:700; border:1px solid #bbf7d0;" title="Real-time Cloud Database Sync">🟢 Cloud Synced</span>
+      </div>
+    </div>
+
 
 </header>
 

@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: mhc-blast-queuing-system
+    runtime: node
+    plan: free
+    buildCommand: ""
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TZ
+        value: Asia/Manila
