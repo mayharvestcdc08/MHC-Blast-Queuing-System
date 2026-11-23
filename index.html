@@ -2501,6 +2501,26 @@ setInterval(function() { if (typeof updateClock === "function") updateClock(); }
         </div>
 
 
+        <!-- AVAILABLE INVENTORY FOR QUEUING PANEL -->
+        <div class="card" style="margin-bottom:20px; border-left:4px solid #16a34a; background:#f0fdf4;">
+            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:12px;">
+                <h3 style="margin:0; color:#14532d; display:flex; align-items:center; gap:8px;">
+                    📦 Available Inventory for Queuing
+                    <span id="queueInvBadge" style="font-size:12px; font-weight:750; background:#bbf7d0; color:#14532d; padding:2px 8px; border-radius:12px;">0 lots</span>
+                </h3>
+                <div style="font-size:13px; color:#15803d; font-weight:700;">
+                    Total Available: <span id="queueInvTotalPacks">0 packs</span> · <span id="queueInvTotalKg">0.0 kg</span>
+                </div>
+            </div>
+            <p style="margin:0 0 12px; color:#475569; font-size:13px;">
+                Ito ang kasalukuyang available na stock sa Blast Inventory. I-click ang <strong>"➕ Use in Queue"</strong> para awtomatikong mailagay ang produkto at production date sa form.
+            </p>
+            <div id="queueAvailableInventoryContainer" style="display:flex; flex-direction:column; gap:8px;"></div>
+            <p id="queueInvEmpty" style="margin:0; padding:16px; text-align:center; color:#64748b; background:#fff; border-radius:6px; border:1px dashed #cbd5e1; font-size:13px;">
+                Walang available na produkto sa Blast Inventory sa kasalukuyan. Magrehistro muna sa <strong>Blast Product Log &amp; Inventory</strong> tab.
+            </p>
+        </div>
+
         <div class="card">
 
             <form id="registrationForm"><div class="form-grid">
@@ -2509,14 +2529,14 @@ setInterval(function() { if (typeof updateClock === "function") updateClock(); }
 <div class="form-group full"><label>Products to Load *</label><p style="margin:0 0 10px;color:#64748b;font-size:13px;">Add multiple products here. All products submitted together will share ONE queue number and move together in the Blast Freezing Dashboard.</p>
 <div id="productEntries">
   <div class="product-entry" style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1fr auto;gap:10px;align-items:end;margin-bottom:10px;padding:12px;border:1px solid #d6e2ef;border-radius:8px;">
-    <div class="form-group"><label>Product *</label><input class="product-name" type="text" placeholder="Enter product name" required autocomplete="off"></div>
+    <div class="form-group"><label>Product *</label><input class="product-name" type="text" placeholder="Enter or select product" list="availableProductList" required autocomplete="off"></div>
     <div class="form-group"><label>Volume *</label><input class="product-volume" type="text" placeholder="Example: 5,000 kg" required autocomplete="off"></div>
     <div class="form-group"><label>Product Temperature (°C) *</label><input class="product-temperature" type="number" step="0.1" placeholder="4.0" required></div>
     <div class="form-group"><label>Production Date *</label><input class="product-production-date" type="date" required></div>
     <button class="btn-secondary remove-product-btn" type="button" onclick="removeProductEntry(this)" style="height:40px;display:none;">Remove</button>
   </div>
 </div>
-
+<datalist id="availableProductList"></datalist>
 </div>
 <div class="form-group"><label for="recorderChecker">Blast Receiver/Recorder *</label><input id="recorderChecker" type="text" placeholder="Enter blast receiver/recorder name" required autocomplete="off"></div>
 <div class="form-group"><label for="forLayer">Layer Status *</label><select id="forLayer" required><option value="No">Not for Layer</option><option value="Yes">For Layer</option></select></div>
@@ -3252,6 +3272,119 @@ function generateQueueNumber() {
    NAVIGATION
 ====================================================== */
 
+
+/* =========================================================
+   AVAILABLE INVENTORY REFLECTION IN PRODUCT QUEUING
+========================================================= */
+
+function renderQueueAvailableInventory() {
+  const inv = getBlastInventory();
+  const activeItems = inv.filter(r => (Number(r.packs) || 0) > 0 || stockQty(r) > 0);
+
+  // Update datalist for autocomplete in product-name inputs
+  const datalist = document.getElementById("availableProductList");
+  if (datalist) {
+    const uniqueProducts = [...new Set(activeItems.map(r => r.product).filter(Boolean))].sort();
+    datalist.innerHTML = uniqueProducts.map(p => '<option value="' + escapeHTML(p) + '">').join("");
+  }
+
+  const container = document.getElementById("queueAvailableInventoryContainer");
+  const countEl = document.getElementById("queueInvBadge");
+  const totalPacksEl = document.getElementById("queueInvTotalPacks");
+  const totalKgEl = document.getElementById("queueInvTotalKg");
+  const emptyEl = document.getElementById("queueInvEmpty");
+
+  if (!container) return;
+
+  const totalPacks = activeItems.reduce((s, r) => s + (Number(r.packs) || 0), 0);
+  const totalKg = activeItems.reduce((s, r) => s + stockQty(r), 0);
+
+  if (countEl) countEl.textContent = activeItems.length + " lot" + (activeItems.length === 1 ? "" : "s");
+  if (totalPacksEl) totalPacksEl.textContent = totalPacks.toLocaleString() + " packs";
+  if (totalKgEl) totalKgEl.textContent = totalKg.toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 2}) + " kg";
+
+  if (activeItems.length === 0) {
+    if (emptyEl) emptyEl.style.display = "block";
+    container.innerHTML = "";
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = "none";
+
+  // Group by Product + Category + ProductionDate
+  const groups = {};
+  activeItems.forEach(item => {
+    const pDate = item.productionDate || item.date || "—";
+    const key = (item.product || "").toLowerCase() + "||" + pDate.toLowerCase();
+    if (!groups[key]) {
+      groups[key] = {
+        product: item.product,
+        category: item.category || item.notes || "Uncategorized",
+        productionDate: pDate,
+        packs: 0,
+        volume: 0
+      };
+    }
+    groups[key].packs += Number(item.packs || 0);
+    groups[key].volume += stockQty(item);
+  });
+
+  const list = Object.values(groups).sort((a, b) => a.product.localeCompare(b.product));
+
+  container.innerHTML = list.map(item => {
+    const packsStr = item.packs > 0 ? "<strong>" + item.packs.toLocaleString() + " packs</strong>" : "";
+    const kgStr = "<strong>" + item.volume.toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 2}) + " kg</strong>";
+    const stockStr = packsStr ? (packsStr + ' <span style="color:#0f766e;font-size:12px;background:#ccfbf1;padding:2px 7px;border-radius:4px;margin-left:4px;">(' + kgStr + ')</span>') : kgStr;
+
+    return '<div style="background:#ffffff; border:1px solid #bbf7d0; border-radius:8px; padding:10px 14px; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; box-shadow:0 1px 3px rgba(0,0,0,0.04);">' +
+      '<div style="min-width:200px;">' +
+        '<div style="display:flex; align-items:center; gap:8px;">' +
+          '<span style="font-weight:800; font-size:15px; color:#14532d;">' + escapeHTML(item.product) + '</span>' +
+          '<span style="font-size:11px; font-weight:750; background:#fef3c7; color:#92400e; padding:2px 7px; border-radius:4px;">' + escapeHTML(item.category) + '</span>' +
+        '</div>' +
+        '<div style="font-size:12px; color:#475569; margin-top:3px;">' +
+          '📅 Production Date: <strong>' + escapeHTML(item.productionDate) + '</strong>' +
+        '</div>' +
+      '</div>' +
+      '<div style="display:flex; align-items:center; gap:14px; flex-wrap:wrap;">' +
+        '<div style="font-size:13px; text-align:right;">' +
+          '<div style="font-size:11px; color:#64748b; font-weight:600;">Available Stock:</div>' +
+          '<div>' + stockStr + '</div>' +
+        '</div>' +
+        '<button type="button" class="btn-secondary" style="padding:6px 14px; font-size:12px; font-weight:750; background:#dcfce7; color:#15803d; border:1px solid #86efac; border-radius:6px; cursor:pointer;" onclick="loadProductIntoQueueForm(\'' + escapeHTML(item.product).replace(/'/g, "\\'") + '\', \'' + escapeHTML(item.productionDate) + '\')">' +
+          '➕ Use in Queue' +
+        '</button>' +
+      '</div>' +
+    '</div>';
+  }).join("");
+}
+
+function loadProductIntoQueueForm(product, productionDate) {
+  const entries = document.querySelectorAll("#productEntries .product-entry");
+  let targetRow = null;
+  for (const row of entries) {
+    const pInput = row.querySelector(".product-name");
+    if (!pInput.value.trim()) {
+      targetRow = row;
+      break;
+    }
+  }
+  if (!targetRow) {
+    addProductEntry();
+    const updatedEntries = document.querySelectorAll("#productEntries .product-entry");
+    targetRow = updatedEntries[updatedEntries.length - 1];
+  }
+  const nameInput = targetRow.querySelector(".product-name");
+  const dateInput = targetRow.querySelector(".product-production-date");
+  const volInput = targetRow.querySelector(".product-volume");
+  if (nameInput) nameInput.value = product;
+  if (dateInput) dateInput.value = productionDate;
+  checkProductProductionDate(targetRow);
+  if (volInput) {
+    volInput.focus();
+    volInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
 function showScreen(
     screenId,
     button
@@ -3306,6 +3439,9 @@ function showScreen(
     }
 
 
+    if (screenId === "registration") {
+        renderQueueAvailableInventory();
+    }
     if (screenId === "liveBoard") {
         renderLiveBlastBoard();
     }
@@ -3424,7 +3560,7 @@ function addProductEntry() {
     const row = document.createElement("div");
     row.className = "product-entry";
     row.style.cssText = "display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1fr auto;gap:10px;align-items:end;margin-bottom:10px;padding:12px;border:1px solid #d6e2ef;border-radius:8px;";
-    row.innerHTML = `<div class="form-group"><label>Product *</label><input class="product-name" type="text" placeholder="Enter product name" required autocomplete="off"></div>
+    row.innerHTML = `<div class="form-group"><label>Product *</label><input class="product-name" type="text" placeholder="Enter or select product" list="availableProductList" required autocomplete="off"></div>
       <div class="form-group"><label>Volume *</label><input class="product-volume" type="text" placeholder="Example: 5,000 kg" required autocomplete="off"></div>
       <div class="form-group"><label>Product Temperature (°C) *</label><input class="product-temperature" type="number" step="0.1" placeholder="4.0" required></div>
       <div class="form-group"><label>Production Date *</label><input class="product-production-date" type="date" required></div>
@@ -3484,23 +3620,37 @@ function checkProductProductionDate(row, showAlert = false) {
         dateInput.insertAdjacentElement("afterend", message);
     }
 
-    if (!productName || !productionDate) {
+    if (!productName) {
         message.textContent = "";
-        message.style.color = "#64748b";
         return false;
     }
 
-    const matchingStock = getBlastInventory().filter(stock =>
-        stockMatches(stock, productName, productionDate) && (stockQty(stock) > 0 || (Number(stock.packs) || 0) > 0)
+    const allMatching = getBlastInventory().filter(stock =>
+        normProductName(stock.product) === normProductName(productName) &&
+        (stockQty(stock) > 0 || (Number(stock.packs) || 0) > 0)
     );
+
+    if (!productionDate) {
+        if (allMatching.length) {
+            const totalKg = allMatching.reduce((s, st) => s + stockQty(st), 0);
+            const totalPacks = allMatching.reduce((s, st) => s + (Number(st.packs) || 0), 0);
+            const dates = [...new Set(allMatching.map(st => stockProdDate(st)))];
+            message.textContent = "ℹ In Stock: " + (totalPacks > 0 ? (totalPacks.toLocaleString() + " packs (" + totalKg.toLocaleString() + " kg)") : (totalKg.toLocaleString() + " kg")) +
+                " · Select Production Date: " + dates.join(", ");
+            message.style.color = "#0284c7";
+        } else {
+            message.textContent = "⚠ Product not found in Blast Inventory.";
+            message.style.color = "#dc2626";
+        }
+        return false;
+    }
+
+    const matchingStock = allMatching.filter(stock => stockProdDate(stock) === normDateStr(productionDate));
     const available = matchingStock.reduce((sum, stock) => sum + stockQty(stock), 0);
     const availPacks = matchingStock.reduce((sum, stock) => sum + (Number(stock.packs) || 0), 0);
 
-    if (!matchingStock.length || available <= 0) {
-        // Help the user: show which Production Dates DO have stock for this product.
-        const otherDates = [...new Set(getBlastInventory()
-            .filter(st => normProductName(st.product) === normProductName(productName) && stockQty(st) > 0)
-            .map(st => stockProdDate(st)))];
+    if (!matchingStock.length || (available <= 0 && availPacks <= 0)) {
+        const otherDates = [...new Set(allMatching.map(st => stockProdDate(st)))];
         message.textContent = "⚠ No available product for this Production Date." +
             (otherDates.length ? " Available Production Date(s) for " + productName + ": " + otherDates.join(", ") : "");
         message.style.color = "#dc2626";
@@ -3509,8 +3659,8 @@ function checkProductProductionDate(row, showAlert = false) {
         return false;
     }
 
-    message.textContent = "✓ Available in Blast Product Log & Inventory: " +
-        (availPacks > 0 ? (availPacks.toLocaleString() + " packs (" + available.toLocaleString() + " kg)") : (available.toLocaleString() + " " + (matchingStock[0].unit || "kg")));
+    message.textContent = "✓ In Stock: " +
+        (availPacks > 0 ? (availPacks.toLocaleString() + " packs (" + available.toLocaleString() + " kg)") : (available.toLocaleString() + " kg"));
     message.style.color = "#15803d";
     dateInput.setCustomValidity("");
     return true;
@@ -5497,6 +5647,7 @@ function renderBlastInventory() {
 
   if (categoryEmpty) categoryEmpty.style.display = categoryNames.length ? "none" : "block";
   renderBlastHistory();
+  renderQueueAvailableInventory();
 }
 
 function parseQueueVolume(raw) {
@@ -5564,6 +5715,7 @@ function applyBlastInventoryDeductions(deductions) {
     });
   });
   saveBlastInventory(rows);
+  renderQueueAvailableInventory();
 }
 
 function escapeBlastHtml(value) { return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
