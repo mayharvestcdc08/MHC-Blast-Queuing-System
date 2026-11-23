@@ -2528,9 +2528,10 @@ setInterval(function() { if (typeof updateClock === "function") updateClock(); }
 <div class="form-group"><label for="queueShift">Shift *</label><select id="queueShift" required><option value="">Select shift</option><option value="Day Shift">Day Shift</option><option value="Mid Shift">Mid Shift</option><option value="Night Shift">Night Shift</option></select></div>
 <div class="form-group full"><label>Products to Load *</label><p style="margin:0 0 10px;color:#64748b;font-size:13px;">Add multiple products here. All products submitted together will share ONE queue number and move together in the Blast Freezing Dashboard.</p>
 <div id="productEntries">
-  <div class="product-entry" style="display:grid;grid-template-columns:2fr 1fr 1.2fr auto;gap:10px;align-items:end;margin-bottom:10px;padding:12px;border:1px solid #d6e2ef;border-radius:8px;">
+  <div class="product-entry" style="display:grid;grid-template-columns:2fr 1.1fr 1.1fr 1.2fr auto;gap:10px;align-items:end;margin-bottom:10px;padding:12px;border:1px solid #d6e2ef;border-radius:8px;">
     <div class="form-group"><label>Product *</label><input class="product-name" type="text" placeholder="Enter or select product" list="availableProductList" required autocomplete="off"></div>
-    <div class="form-group"><label>Volume *</label><input class="product-volume" type="text" placeholder="Example: 5,000 kg or 500 packs" required autocomplete="off"></div>
+    <div class="form-group"><label>Quantity (Packs) *</label><input class="product-packs" type="number" min="1" step="1" placeholder="e.g., 500" required autocomplete="off"></div>
+    <div class="form-group"><label>Equivalent Kilos (kg) *</label><input class="product-volume" type="number" min="0.01" step="0.01" placeholder="e.g., 750.25" required autocomplete="off"></div>
     <div class="form-group"><label>Production Date *</label><input class="product-production-date" type="date" required></div>
     <button class="btn-secondary remove-product-btn" type="button" onclick="removeProductEntry(this)" style="height:40px;display:none;">Remove</button>
   </div>
@@ -3374,13 +3375,13 @@ function loadProductIntoQueueForm(product, productionDate) {
   }
   const nameInput = targetRow.querySelector(".product-name");
   const dateInput = targetRow.querySelector(".product-production-date");
-  const volInput = targetRow.querySelector(".product-volume");
+  const packsInput = targetRow.querySelector(".product-packs");
   if (nameInput) nameInput.value = product;
   if (dateInput) dateInput.value = productionDate;
   checkProductProductionDate(targetRow);
-  if (volInput) {
-    volInput.focus();
-    volInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  if (packsInput) {
+    packsInput.focus();
+    packsInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 }
 
@@ -3558,9 +3559,10 @@ function addProductEntry() {
     const entries = document.getElementById("productEntries");
     const row = document.createElement("div");
     row.className = "product-entry";
-    row.style.cssText = "display:grid;grid-template-columns:2fr 1fr 1.2fr auto;gap:10px;align-items:end;margin-bottom:10px;padding:12px;border:1px solid #d6e2ef;border-radius:8px;";
+    row.style.cssText = "display:grid;grid-template-columns:2fr 1.1fr 1.1fr 1.2fr auto;gap:10px;align-items:end;margin-bottom:10px;padding:12px;border:1px solid #d6e2ef;border-radius:8px;";
     row.innerHTML = `<div class="form-group"><label>Product *</label><input class="product-name" type="text" placeholder="Enter or select product" list="availableProductList" required autocomplete="off"></div>
-      <div class="form-group"><label>Volume *</label><input class="product-volume" type="text" placeholder="Example: 5,000 kg or 500 packs" required autocomplete="off"></div>
+      <div class="form-group"><label>Quantity (Packs) *</label><input class="product-packs" type="number" min="1" step="1" placeholder="e.g., 500" required autocomplete="off"></div>
+      <div class="form-group"><label>Equivalent Kilos (kg) *</label><input class="product-volume" type="number" min="0.01" step="0.01" placeholder="e.g., 750.25" required autocomplete="off"></div>
       <div class="form-group"><label>Production Date *</label><input class="product-production-date" type="date" required></div>
       <button class="btn-secondary remove-product-btn" type="button" onclick="removeProductEntry(this)" style="height:40px;">Remove</button>`;
     entries.appendChild(row);
@@ -3692,33 +3694,75 @@ document.getElementById("registrationForm").addEventListener("submit", function(
     const dateShift = queueDate + " / " + queueShift;
     const recorderChecker = document.getElementById("recorderChecker").value.trim();
     const priority = document.getElementById("priority").value;
+
     const products = Array.from(document.querySelectorAll("#productEntries .product-entry")).map(row => {
-        const tempEl = row.querySelector(".product-temperature");
+        const packsVal = Number(row.querySelector(".product-packs")?.value) || 0;
+        const kgVal = Number(row.querySelector(".product-volume")?.value) || 0;
+        const displayVol = packsVal > 0
+            ? `${packsVal.toLocaleString()} packs (${kgVal.toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 2})} kg)`
+            : `${kgVal.toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 2})} kg`;
         return {
             product: row.querySelector(".product-name").value.trim(),
-            volume: row.querySelector(".product-volume").value.trim(),
-            productTemperature: tempEl ? tempEl.value : "",
+            packs: packsVal,
+            equivalentKg: kgVal,
+            volume: displayVol,
+            amount: kgVal > 0 ? kgVal : packsVal,
+            unit: kgVal > 0 ? "kg" : "packs",
             productionDate: row.querySelector(".product-production-date").value
         };
     });
 
-    // Each registered product becomes "For Blast" inventory: keep its numeric volume so it can be split across blasts.
-    products.forEach(p => { const pv = parseQueueVolume(p.volume); if (pv) { p.amount = pv.amount; p.unit = pv.unit; } p.allocated = 0; });
-    const inventoryForDates = getBlastInventory();
+    products.forEach(p => { p.allocated = 0; });
+    const inventoryBeforeQueue = getBlastInventory();
+    const deductions = [];
+
     for (const item of products) {
-        const hasAvailableDate = inventoryForDates.some(stock =>
-            stockMatches(stock, item.product, item.productionDate) && stockQty(stock) > 0
-        );
-        if (!item.productionDate || !hasAvailableDate) {
-            alert("No available product for this Production Date. Product: " + item.product +
-                "\\nProduction Date: " + (item.productionDate || "Not selected") +
-                "\\nPlease check Blast Product Log & Inventory.");
+        if (!item.product) {
+            alert("Please enter a valid product name.");
             return;
         }
+        if (item.packs <= 0 && item.equivalentKg <= 0) {
+            alert(`Please enter Quantity in Packs and Equivalent Kilos for ${item.product}.`);
+            return;
+        }
+        if (!item.productionDate) {
+            alert(`Please select a Production Date for ${item.product}.`);
+            return;
+        }
+
+        const matchingRows = inventoryBeforeQueue.filter(r =>
+            stockMatches(r, item.product, item.productionDate) &&
+            (stockQty(r) > 0 || (Number(r.packs) || 0) > 0)
+        );
+
+        const availPacks = matchingRows.reduce((sum, r) => sum + (Number(r.packs) || 0), 0);
+        const availKg = matchingRows.reduce((sum, r) => sum + stockQty(r), 0);
+
+        if (!matchingRows.length || (availKg <= 0 && availPacks <= 0)) {
+            alert(`No available inventory found for ${item.product} (Production Date: ${item.productionDate}).\nPlease check Blast Product Log & Inventory.`);
+            return;
+        }
+
+        if (item.packs > 0 && availPacks > 0 && availPacks < item.packs) {
+            alert(`Insufficient inventory packs for ${item.product}.\nAvailable: ${availPacks.toLocaleString()} packs (${availKg.toLocaleString()} kg)\nRequested: ${item.packs.toLocaleString()} packs.`);
+            return;
+        }
+
+        if (item.equivalentKg > 0 && availKg > 0 && availKg < item.equivalentKg) {
+            alert(`Insufficient inventory weight for ${item.product}.\nAvailable: ${availKg.toLocaleString()} kg (${availPacks.toLocaleString()} packs)\nRequested: ${item.equivalentKg.toLocaleString()} kg.`);
+            return;
+        }
+
+        deductions.push({
+            product: item.product,
+            productionDate: item.productionDate,
+            packs: item.packs,
+            amount: item.equivalentKg,
+            unit: "kg"
+        });
     }
 
     const now = new Date();
-    // Barcode Scanning is NOT recorded automatically anymore. It is recorded together with Layering Start.
     const localQueueStart = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0,16);
     const initialBlastActivities = [
         "Barcode Scanning (Fresh Input)", "Layering", "Transfer to Blast Freezing Room",
@@ -3726,15 +3770,13 @@ document.getElementById("registrationForm").addEventListener("submit", function(
     ].map((name, index) => ({
         name, start: "", end: "", remarks: "", manning: "", recorder: "", blastSupervisor: ""
     }));
-    // Repeat product registrations are allowed; each submission becomes its own queue record.
-    // One submission = one queue record, containing multiple product details.
+
     const record = {
         id: Date.now() + Math.floor(Math.random()*100000),
         queue: generateQueueNumber(), date: todayString(), queueDate, queueShift, dateShift,
         products,
         product: products.map(p => p.product).join(", "),
         volume: products.map(p => p.product + ": " + p.volume).join("; "),
-        productTemperature: products.map(p => p.product + ": " + p.productTemperature + "°C").join("; "),
         productionDate: products.map(p => p.product + ": " + p.productionDate).join("; "),
         recorderChecker, priority, isForLayer: document.getElementById("forLayer").value === "Yes",
         arrival: now.toLocaleTimeString(), arrivalTimestamp: now.toISOString(), status: "Waiting", queueStarted: true, queueStartedAt: now.toISOString(),
@@ -3743,51 +3785,22 @@ document.getElementById("registrationForm").addEventListener("submit", function(
         company: dateShift, contact: "", loadType: products.map(p => p.product).join(", "),
         destination: products.map(p => p.productionDate).join(", "), reference: products.map(p => p.volume).join(", ")
     };
-    // Validate and deduct queued product volumes from Blast Product Inventory.
-    // Queue volume may be entered as "3,000", "3,000 kg", or "3,000.0 kg".
-    const inventoryBeforeQueue = getBlastInventory();
-    const deductions = [];
-    for (const item of products) {
-        const parsed = parseQueueVolume(item.volume);
-        if (!parsed || parsed.amount <= 0) {
-            alert(`Please enter a valid volume for ${item.product}. Example: 3,000 kg.`);
-            return;
-        }
-        const isPacks = (parsed.unit === "packs");
-        const matchingRows = inventoryBeforeQueue.filter(r =>
-            stockMatches(r, item.product, item.productionDate) &&
-            (!parsed.unit || isPacks || String(r.unit || "").trim().toLowerCase() === parsed.unit.toLowerCase()) &&
-            (stockQty(r) > 0 || (Number(r.packs) || 0) > 0)
-        );
-        const available = isPacks
-            ? matchingRows.reduce((sum, r) => sum + (Number(r.packs) || 0), 0)
-            : matchingRows.reduce((sum, r) => sum + stockQty(r), 0);
-        const displayUnit = isPacks ? "packs" : (matchingRows[0] ? (matchingRows[0].unit || "kg") : "kg");
-        if (!matchingRows.length) {
-            alert(`No matching inventory found for ${item.product}${parsed.unit ? " (" + parsed.unit + ")" : ""}. Please register it in Blast Product Log & Inventory first.`);
-            return;
-        }
-        if (available < parsed.amount) {
-            alert(`Insufficient inventory for ${item.product}. Available: ${available.toLocaleString()} ${displayUnit}; Requested: ${parsed.amount.toLocaleString()} ${displayUnit}.`);
-            return;
-        }
-        deductions.push({ product: item.product, productionDate: item.productionDate, amount: parsed.amount, unit: isPacks ? "packs" : (matchingRows[0].unit || "kg") });
-    }
 
     trucks.push(record);
     saveData();
     applyBlastInventoryDeductions(deductions);
     renderBlastInventory();
+    renderQueueAvailableInventory();
     document.getElementById("newQueueNumber").textContent = record.queue;
     document.getElementById("newTicketInfo").innerHTML = "<strong>Queue:</strong> " + escapeHTML(record.queue) +
         "<br><strong>Products in this queue:</strong><br>" + products.map(p => escapeHTML(p.product) +
-        " — " + escapeHTML(p.volume) + (p.productTemperature ? " — " + escapeHTML(p.productTemperature) + " °C" : "") + " — Production: " + escapeHTML(p.productionDate)).join("<br>") +
+        " — " + escapeHTML(p.volume) + " — Production: " + escapeHTML(p.productionDate)).join("<br>") +
         "<br><strong>Prioritization:</strong> " + escapeHTML(priority) + "<br><strong>Date:</strong> " + escapeHTML(queueDate) + "<br><strong>Shift:</strong> " + escapeHTML(queueShift) +
         "<br><strong>Blast Receiver/Recorder:</strong> " + escapeHTML(recorderChecker);
     document.getElementById("registrationSuccess").classList.add("show");
     window.lastRegisteredTruck = record;
     document.getElementById("registrationForm").reset();
-    document.getElementById("productEntries").innerHTML = `<div class="product-entry" style="display:grid;grid-template-columns:2fr 1fr 1.2fr auto;gap:10px;align-items:end;margin-bottom:10px;padding:12px;border:1px solid #d6e2ef;border-radius:8px;"><div class="form-group"><label>Product *</label><input class="product-name" type="text" placeholder="Enter or select product" list="availableProductList" required autocomplete="off"></div><div class="form-group"><label>Volume *</label><input class="product-volume" type="text" placeholder="Example: 5,000 kg or 500 packs" required autocomplete="off"></div><div class="form-group"><label>Production Date *</label><input class="product-production-date" type="date" required></div><button class="btn-secondary remove-product-btn" type="button" onclick="removeProductEntry(this)" style="height:40px;display:none;">Remove</button></div>`;
+    document.getElementById("productEntries").innerHTML = `<div class="product-entry" style="display:grid;grid-template-columns:2fr 1.1fr 1.1fr 1.2fr auto;gap:10px;align-items:end;margin-bottom:10px;padding:12px;border:1px solid #d6e2ef;border-radius:8px;"><div class="form-group"><label>Product *</label><input class="product-name" type="text" placeholder="Enter or select product" list="availableProductList" required autocomplete="off"></div><div class="form-group"><label>Quantity (Packs) *</label><input class="product-packs" type="number" min="1" step="1" placeholder="e.g., 500" required autocomplete="off"></div><div class="form-group"><label>Equivalent Kilos (kg) *</label><input class="product-volume" type="number" min="0.01" step="0.01" placeholder="e.g., 750.25" required autocomplete="off"></div><div class="form-group"><label>Production Date *</label><input class="product-production-date" type="date" required></div><button class="btn-secondary remove-product-btn" type="button" onclick="removeProductEntry(this)" style="height:40px;display:none;">Remove</button></div>`;
     updateStats(); renderQueue();
 });
 
@@ -5670,33 +5683,25 @@ function parseQueueVolume(raw) {
 function applyBlastInventoryDeductions(deductions) {
   const rows = getBlastInventory();
   deductions.forEach(d => {
-    let remaining = d.amount;
-    const isPacksDeduction = (d.unit === "packs");
+    let remKg = Number(d.amount || 0);
+    let remPacks = Number(d.packs || 0);
 
     for (const row of rows) {
-      if (remaining <= 0) break;
+      if (remKg <= 0 && remPacks <= 0) break;
       if (!stockMatches(row, d.product, d.productionDate)) continue;
 
-      const currentStock = isPacksDeduction ? Math.max(0, Number(row.packs || 0)) : Math.max(0, stockQty(row));
-      if (currentStock <= 0) continue;
+      const currentKg = Math.max(0, stockQty(row));
+      const currentPacks = Math.max(0, Number(row.packs || 0));
+      if (currentKg <= 0 && currentPacks <= 0) continue;
 
-      const take = Math.min(currentStock, remaining);
-      const ratio = currentStock > 0 ? (take / currentStock) : 1;
+      const takeKg = Math.min(currentKg, remKg);
+      const takePacks = Math.min(currentPacks, remPacks);
 
-      if (isPacksDeduction) {
-        row.packs = Math.max(0, Math.round(currentStock - take));
-        const currentKg = Math.max(0, Number(row.volume || 0));
-        const kgDeduct = currentKg * ratio;
-        row.volume = Math.max(0, Math.round((currentKg - kgDeduct + Number.EPSILON) * 100) / 100);
-      } else {
-        const currentKg = Math.max(0, stockQty(row));
-        row.volume = Math.max(0, Math.round((currentKg - take + Number.EPSILON) * 100) / 100);
-        if (row.packs) {
-          const packDeduct = Math.round(Number(row.packs) * ratio);
-          row.packs = Math.max(0, Number(row.packs) - packDeduct);
-        }
-      }
-      remaining = Math.round((remaining - take + Number.EPSILON) * 100) / 100;
+      row.volume = Math.max(0, Math.round((currentKg - takeKg + Number.EPSILON) * 100) / 100);
+      row.packs = Math.max(0, Math.round(currentPacks - takePacks));
+
+      remKg = Math.round((remKg - takeKg + Number.EPSILON) * 100) / 100;
+      remPacks = Math.round(remPacks - takePacks);
     }
 
     const remainingStock = rows.filter(r => stockMatches(r, d.product, d.productionDate)).reduce((sum, r) => sum + stockQty(r), 0);
@@ -5706,13 +5711,13 @@ function applyBlastInventoryDeductions(deductions) {
       type: "DEDUCTION",
       product: d.product,
       volume: d.amount,
-      unit: d.unit || "kg",
-      packs: isPacksDeduction ? d.amount : 0,
+      unit: "kg",
+      packs: d.packs,
       remaining: remainingStock,
       remainingPacks: remainingPacks,
       queue: (window.lastRegisteredTruck && window.lastRegisteredTruck.queue) || "New queue",
       shift: (window.lastRegisteredTruck && window.lastRegisteredTruck.queueShift) || "",
-      details: "Deducted when product was added to Product Queuing for Blast" + (remainingPacks > 0 ? " (" + remainingPacks.toLocaleString() + " packs remaining)" : "")
+      details: "Queued for Blast Freezing" + (d.packs > 0 ? " (" + d.packs.toLocaleString() + " packs · " + Number(d.amount).toLocaleString(undefined,{minimumFractionDigits:1,maximumFractionDigits:2}) + " kg)" : "")
     });
   });
   saveBlastInventory(rows);
