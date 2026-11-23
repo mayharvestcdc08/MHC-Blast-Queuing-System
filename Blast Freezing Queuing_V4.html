@@ -1604,7 +1604,8 @@ tr:hover {
 
 </style>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
 /* =========================================================
    MHC REAL-TIME CLOUD DATABASE & ONLINE TIME ENGINE
 ========================================================= */
@@ -1692,7 +1693,7 @@ function todayString() {
 }
 
 // Override updateClock to show accurate PST
-function updateClock() {
+window.updateClock = function updateClock() {
   const now = getPSTNow();
 
   // Format Date and Time in Asia/Manila (UTC+8)
@@ -1871,11 +1872,24 @@ function applyIncomingCloudData(cloudData) {
   }
 
   // 2. Inventory Merge
-  if (Array.isArray(cloudData.inventory)) {
+  if (Array.isArray(cloudData.inventory) && cloudData.inventory.length > 0) {
     const localInv = getBlastInventory();
-    if (JSON.stringify(localInv) !== JSON.stringify(cloudData.inventory)) {
-      saveBlastInventory(cloudData.inventory);
+    if (localInv.length === 0) {
+      localStorage.setItem(BLAST_INVENTORY_KEY, JSON.stringify(cloudData.inventory));
       changed = true;
+    } else {
+      const invMap = new Map();
+      localInv.forEach(it => invMap.set((it.product || '') + '_' + (it.productionDate || '') + '_' + (it.createdAt || ''), it));
+      cloudData.inventory.forEach(it => {
+        const k = (it.product || '') + '_' + (it.productionDate || '') + '_' + (it.createdAt || '');
+        if (!invMap.has(k)) {
+          invMap.set(k, it);
+          changed = true;
+        }
+      });
+      if (changed) {
+        localStorage.setItem(BLAST_INVENTORY_KEY, JSON.stringify(Array.from(invMap.values())));
+      }
     }
   }
 
@@ -1962,12 +1976,16 @@ function initRealtimeSubscription() {
   }
 }
 
-// Wrap existing saveData to also sync to cloud
-const _originalSaveData = saveData;
-saveData = function() {
-  _originalSaveData();
-  triggerCloudSync();
-};
+// Safely wrap saveData to also sync to cloud once defined
+window.addEventListener('DOMContentLoaded', function() {
+  if (typeof saveData === 'function') {
+    const _originalSaveData = saveData;
+    window.saveData = function() {
+      _originalSaveData();
+      if (typeof triggerCloudSync === 'function') triggerCloudSync();
+    };
+  }
+});
 
 /* =========================================================
    30-DAY & EXTENDED HISTORICAL REPORTS ENGINE
@@ -2287,6 +2305,7 @@ function printExtendedReportPDF() {
 window.addEventListener('DOMContentLoaded', () => {
   syncOnlineTime();
   setInterval(syncOnlineTime, 60000);
+setInterval(function() { if (typeof updateClock === "function") updateClock(); }, 1000);
   pullCloudSync();
   initRealtimeSubscription();
   setExtendedReportRange('30days');
@@ -2419,15 +2438,24 @@ window.addEventListener('DOMContentLoaded', () => {
         <div class="form-group"><label for="blastLogDate">Date *</label><input id="blastLogDate" type="date" required></div>
         <div class="form-group"><label for="blastLogProductionDate">Production Date *</label><input id="blastLogProductionDate" type="date" required></div>
         <div class="form-group"><label for="blastLogProduct">Product Name *</label><input id="blastLogProduct" type="text" placeholder="e.g., HJAC, CCM, MDS" required></div>
-        <div class="form-group"><label for="blastLogVolume">Volume *</label><input id="blastLogVolume" type="number" min="0.01" step="0.01" placeholder="e.g., 5000" required></div>
-        <div class="form-group"><label for="blastLogUnit">Unit *</label><select id="blastLogUnit" required><option value="kg">kg</option><option value="MT">MT</option><option value="boxes">boxes</option><option value="cases">cases</option></select></div>
-        <div class="form-group"><label for="blastLogCategory">Product Category *</label><select id="blastLogCategory" required><option value="Marinated">Marinated</option><option value="Timplados">Timplados</option><option value="Branded">Branded</option><option value="Deboned">Deboned</option><option value="Whole Chicken">Whole Chicken</option><option value="Giblets">Giblets</option></select></div>
+        <div class="form-group"><label for="blastLogCategory">Product Category *</label><select id="blastLogCategory" required>
+          <option value="Marinated">Marinated</option>
+          <option value="Timplados">Timplados</option>
+          <option value="Branded">Branded</option>
+          <option value="Deboned">Deboned</option>
+          <option value="Whole Chicken">Whole Chicken</option>
+          <option value="Giblets">Giblets</option>
+          <option value="CNJ">CNJ</option>
+        </select></div>
+        <div class="form-group"><label for="blastLogPacks">Quantity (Packs) *</label><input id="blastLogPacks" type="number" min="1" step="1" placeholder="Enter packs (e.g., 500)" required></div>
+        <div class="form-group"><label for="blastLogVolume">Equivalent Kilos (kg) *</label><input id="blastLogVolume" type="number" min="0.01" step="0.01" placeholder="Enter kilos manually (e.g., 500.00)" required></div>
+        <input id="blastLogUnit" type="hidden" value="kg">
         <div class="form-group full"><button class="btn-primary big-button" type="submit">ADD TO BLAST INVENTORY</button></div>
       </form>
     </div>
     <div class="card" style="margin-top:20px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h3 style="margin:0">Registered Products &amp; Inventory</h3><div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn-secondary" onclick="exportBlastInventory()">Export Inventory CSV</button><button type="button" class="btn-secondary" style="background:#b91c1c;color:#fff;border-color:#b91c1c" onclick="resetBlastInventory()">Reset All Inventory</button></div></div>
-      <p style="color:#64748b;margin:8px 0 14px">Example: HJAC — 5,000 kg; CCM — 3,200 kg; MDS — 1,500 kg. Records you add will appear in this inventory table.</p>
+      <p style="color:#64748b;margin:8px 0 14px">Example: HJAC — 500 packs (500.0 kg); CCM — 320 packs (320.0 kg). Records you add will display both packs and equivalent kilos.</p>
       <div id="blastInventorySummary" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px"></div>
       <div style="display:grid;grid-template-columns:minmax(0,1.7fr) minmax(260px,1fr);gap:14px;margin:0 0 18px;align-items:start">
         <div class="card" style="margin:0;background:#fff7ed;border:1px solid #fed7aa;box-shadow:none;min-width:0">
@@ -2436,7 +2464,7 @@ window.addEventListener('DOMContentLoaded', () => {
           <p id="blastCategoryInventoryEmpty" style="display:none;color:#9a3412;text-align:center;padding:14px">No categorized stock registered yet.</p>
         </div>
       </div>
-      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:900px"><thead><tr style="background:#eff6ff;text-align:left"><th style="padding:10px">Production Date</th><th style="padding:10px">Registered At</th><th style="padding:10px">Product</th><th style="padding:10px">Available Volume</th><th style="padding:10px">Category</th><th style="padding:10px">Action</th></tr></thead><tbody id="blastInventoryRows"></tbody></table></div>
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;min-width:900px"><thead><tr style="background:#eff6ff;text-align:left"><th style="padding:10px">Production Date</th><th style="padding:10px">Registered At</th><th style="padding:10px">Product</th><th style="padding:10px">Available Stock (Packs &amp; Kilos)</th><th style="padding:10px">Category</th><th style="padding:10px">Action</th></tr></thead><tbody id="blastInventoryRows"></tbody></table></div>
       <p id="blastInventoryEmpty" style="display:none;color:#64748b;text-align:center;padding:18px">No products registered yet. Add a product above to build the inventory.</p>
     </div>
     <div class="card" style="margin-top:20px">
@@ -3463,9 +3491,10 @@ function checkProductProductionDate(row, showAlert = false) {
     }
 
     const matchingStock = getBlastInventory().filter(stock =>
-        stockMatches(stock, productName, productionDate) && stockQty(stock) > 0
+        stockMatches(stock, productName, productionDate) && (stockQty(stock) > 0 || (Number(stock.packs) || 0) > 0)
     );
     const available = matchingStock.reduce((sum, stock) => sum + stockQty(stock), 0);
+    const availPacks = matchingStock.reduce((sum, stock) => sum + (Number(stock.packs) || 0), 0);
 
     if (!matchingStock.length || available <= 0) {
         // Help the user: show which Production Dates DO have stock for this product.
@@ -3481,7 +3510,7 @@ function checkProductProductionDate(row, showAlert = false) {
     }
 
     message.textContent = "✓ Available in Blast Product Log & Inventory: " +
-        available.toLocaleString() + " " + (matchingStock[0].unit || "");
+        (availPacks > 0 ? (availPacks.toLocaleString() + " packs (" + available.toLocaleString() + " kg)") : (available.toLocaleString() + " " + (matchingStock[0].unit || "kg")));
     message.style.color = "#15803d";
     dateInput.setCustomValidity("");
     return true;
@@ -3573,21 +3602,25 @@ document.getElementById("registrationForm").addEventListener("submit", function(
             alert(`Please enter a valid volume for ${item.product}. Example: 3,000 kg.`);
             return;
         }
+        const isPacks = (parsed.unit === "packs");
         const matchingRows = inventoryBeforeQueue.filter(r =>
             stockMatches(r, item.product, item.productionDate) &&
-            (!parsed.unit || String(r.unit || "").trim().toLowerCase() === parsed.unit.toLowerCase()) &&
-            stockQty(r) > 0
+            (!parsed.unit || isPacks || String(r.unit || "").trim().toLowerCase() === parsed.unit.toLowerCase()) &&
+            (stockQty(r) > 0 || (Number(r.packs) || 0) > 0)
         );
-        const available = matchingRows.reduce((sum, r) => sum + stockQty(r), 0);
+        const available = isPacks
+            ? matchingRows.reduce((sum, r) => sum + (Number(r.packs) || 0), 0)
+            : matchingRows.reduce((sum, r) => sum + stockQty(r), 0);
+        const displayUnit = isPacks ? "packs" : (matchingRows[0] ? (matchingRows[0].unit || "kg") : "kg");
         if (!matchingRows.length) {
             alert(`No matching inventory found for ${item.product}${parsed.unit ? " (" + parsed.unit + ")" : ""}. Please register it in Blast Product Log & Inventory first.`);
             return;
         }
         if (available < parsed.amount) {
-            alert(`Insufficient inventory for ${item.product}. Available: ${available.toLocaleString()} ${matchingRows[0].unit}; Requested: ${parsed.amount.toLocaleString()} ${matchingRows[0].unit}.`);
+            alert(`Insufficient inventory for ${item.product}. Available: ${available.toLocaleString()} ${displayUnit}; Requested: ${parsed.amount.toLocaleString()} ${displayUnit}.`);
             return;
         }
-        deductions.push({ product: item.product, productionDate: item.productionDate, amount: parsed.amount, unit: matchingRows[0].unit });
+        deductions.push({ product: item.product, productionDate: item.productionDate, amount: parsed.amount, unit: isPacks ? "packs" : (matchingRows[0].unit || "kg") });
     }
 
     trucks.push(record);
@@ -5169,30 +5202,17 @@ function resetDay() {
 }
 
 
-/* ======================================================
-   CLOCK
-====================================================== */
-
 function updateClock() {
-
-    const now =
-        new Date();
-
-
-    document
-        .getElementById(
-            "clock"
-        )
-        .textContent =
-            now.toLocaleString();
-
+  if (typeof window.updateClock === 'function' && window.updateClock !== updateClock) {
+    window.updateClock();
+  } else {
+    const cDate = document.getElementById("clockDate");
+    const cTime = document.getElementById("clockTime");
+    const now = new Date();
+    if (cDate) cDate.textContent = "📅 " + now.toDateString();
+    if (cTime) cTime.textContent = "🕒 " + now.toLocaleTimeString();
+  }
 }
-
-
-setInterval(
-    updateClock,
-    1000
-);
 
 
 /* ======================================================
@@ -5362,7 +5382,7 @@ function fifoSortInventory(rows) {
   }).map(x => x.r);
 }
 function getBlastInventory() { try { return fifoSortInventory(JSON.parse(localStorage.getItem(BLAST_INVENTORY_KEY) || "[]")); } catch (e) { return []; } }
-function saveBlastInventory(rows) { localStorage.setItem(BLAST_INVENTORY_KEY, JSON.stringify(rows)); }
+function saveBlastInventory(rows) { localStorage.setItem(BLAST_INVENTORY_KEY, JSON.stringify(rows)); if (typeof triggerCloudSync === "function") triggerCloudSync(); }
 const BLAST_HISTORY_KEY = "mhcBlastInventoryHistory_v1";
 function getBlastHistory() { try { return JSON.parse(localStorage.getItem(BLAST_HISTORY_KEY) || "[]"); } catch (e) { return []; } }
 function addBlastHistory(entry) { const history = getBlastHistory(); history.unshift({ timestamp: new Date().toISOString(), ...entry }); localStorage.setItem(BLAST_HISTORY_KEY, JSON.stringify(history)); }
@@ -5380,42 +5400,105 @@ function renderBlastInventory() {
   const tbody = document.getElementById("blastInventoryRows");
   const empty = document.getElementById("blastInventoryEmpty");
   if (!tbody) return;
-  tbody.innerHTML = rows.map((r, i) => `<tr style="border-bottom:1px solid #e2e8f0"><td style="padding:10px">${escapeBlastHtml(r.productionDate || r.date || "—")}</td><td style="padding:10px;white-space:nowrap">${escapeBlastHtml(formatBlastTimestamp(r.createdAt))}</td><td style="padding:10px;font-weight:700">${escapeBlastHtml(r.product)}</td><td style="padding:10px">${Number(r.volume).toLocaleString()} ${escapeBlastHtml(r.unit)}</td><td style="padding:10px">${escapeBlastHtml(r.category || r.notes || "—")}</td><td style="padding:10px"><button type="button" class="btn-secondary" onclick="deleteBlastInventory(${i})">Delete</button></td></tr>`).join("");
+
+  tbody.innerHTML = rows.map((r, i) => {
+    const packsVal = Number(r.packs || 0);
+    const kgVal = Number(r.volume || 0);
+    let stockDisplay = '';
+    if (packsVal > 0) {
+      stockDisplay = `<span style="font-size:14px;font-weight:750;color:#1e3a8a;">${packsVal.toLocaleString()} packs</span> <span style="font-size:12.5px;color:#0f766e;font-weight:650;background:#ccfbf1;padding:2px 8px;border-radius:4px;white-space:nowrap;margin-left:5px;">(${kgVal.toLocaleString(undefined, {minimumFractionDigits:1, maximumFractionDigits:2})} kg)</span>`;
+    } else {
+      stockDisplay = `<span style="font-weight:700;">${kgVal.toLocaleString(undefined, {maximumFractionDigits:2})} ${escapeBlastHtml(r.unit || 'kg')}</span>`;
+    }
+
+    return `<tr style="border-bottom:1px solid #e2e8f0">
+      <td style="padding:10px">${escapeBlastHtml(r.productionDate || r.date || "—")}</td>
+      <td style="padding:10px;white-space:nowrap">${escapeBlastHtml(formatBlastTimestamp(r.createdAt))}</td>
+      <td style="padding:10px;font-weight:700">${escapeBlastHtml(r.product)}</td>
+      <td style="padding:10px">${stockDisplay}</td>
+      <td style="padding:10px"><span style="font-weight:750;padding:3px 9px;border-radius:4px;background:#fef3c7;color:#92400e;">${escapeBlastHtml(r.category || r.notes || "—")}</span></td>
+      <td style="padding:10px"><button type="button" class="btn-secondary" onclick="deleteBlastInventory(${i})">Delete</button></td>
+    </tr>`;
+  }).join("");
   empty.style.display = rows.length ? "none" : "block";
-  const totals = {}; rows.forEach(r => { const key = r.unit; totals[key] = (totals[key] || 0) + Number(r.volume || 0); });
-  document.getElementById("blastInventorySummary").innerHTML = `<div style="background:#eff6ff;padding:12px 16px;border-radius:8px"><strong>${rows.length}</strong><br><span style="font-size:12px">Inventory entries</span></div>` + Object.entries(totals).map(([unit,total]) => `<div style="background:#f0fdf4;padding:12px 16px;border-radius:8px"><strong>${total.toLocaleString(undefined,{maximumFractionDigits:2})} ${escapeBlastHtml(unit)}</strong><br><span style="font-size:12px">Total by unit</span></div>`).join("");
-  // Side board: group registered remaining stock under its selected category.
+
+  const totalPacks = rows.reduce((sum, r) => sum + Number(r.packs || 0), 0);
+  const totalKg = rows.reduce((sum, r) => sum + Number(r.volume || 0), 0);
+
+  const summaryEl = document.getElementById("blastInventorySummary");
+  if (summaryEl) {
+    summaryEl.innerHTML = `
+      <div style="background:#eff6ff;padding:12px 16px;border-radius:8px;border:1px solid #bfdbfe">
+        <strong style="font-size:18px;color:#1e40af">${rows.length}</strong><br>
+        <span style="font-size:12px;color:#475569">Total Inventory Entries</span>
+      </div>
+      <div style="background:#f0fdf4;padding:12px 16px;border-radius:8px;border:1px solid #bbf7d0">
+        <strong style="font-size:18px;color:#166534">${totalPacks.toLocaleString()} packs</strong><br>
+        <span style="font-size:12px;color:#15803d;font-weight:600">Total Available Packs</span>
+      </div>
+      <div style="background:#ecfdf5;padding:12px 16px;border-radius:8px;border:1px solid #a7f3d0">
+        <strong style="font-size:18px;color:#065f46">${totalKg.toLocaleString(undefined, {minimumFractionDigits:1, maximumFractionDigits:2})} kg</strong><br>
+        <span style="font-size:12px;color:#047857;font-weight:600">Total Equivalent Kilos</span>
+      </div>
+    `;
+  }
+
+  // Side board: group registered remaining stock under its selected category (including CNJ).
   const categoryGroups = {};
   rows.forEach(r => {
     const rawCategory = String(r.category || r.notes || "Uncategorized").trim() || "Uncategorized";
-    const category = rawCategory.toLowerCase() === "debone" ? "Deboned" : rawCategory; // old saved entries
+    const category = rawCategory.toLowerCase() === "debone" ? "Deboned" : rawCategory;
     const product = String(r.product || "Unnamed Product").trim();
-    const unit = String(r.unit || "");
     const productionDate = String(r.productionDate || r.date || "").trim() || "—";
-    const key = product.toLowerCase() + "||" + unit.toLowerCase() + "||" + productionDate.toLowerCase();
+    const key = product.toLowerCase() + "||" + productionDate.toLowerCase();
     if (!categoryGroups[category]) categoryGroups[category] = {};
-    if (!categoryGroups[category][key]) categoryGroups[category][key] = { product, unit, volume: 0, productionDate };
+    if (!categoryGroups[category][key]) categoryGroups[category][key] = { product, packs: 0, volume: 0, productionDate };
+    categoryGroups[category][key].packs += Number(r.packs || 0);
     categoryGroups[category][key].volume += Number(r.volume || 0);
   });
+
   const categoryBoard = document.getElementById("blastCategoryInventoryBoard");
   const categoryEmpty = document.getElementById("blastCategoryInventoryEmpty");
-  const categoryOrder = ["Marinated", "Timplados", "Branded", "Deboned", "Whole Chicken", "Giblets"];
+  const categoryOrder = ["Marinated", "Timplados", "Branded", "Deboned", "Whole Chicken", "Giblets", "CNJ"];
   const categoryNames = Object.keys(categoryGroups).sort((a,b) => {
     const ai = categoryOrder.findIndex(name => name.toLowerCase() === a.toLowerCase());
     const bi = categoryOrder.findIndex(name => name.toLowerCase() === b.toLowerCase());
     if (ai !== -1 || bi !== -1) return (ai === -1 ? categoryOrder.length : ai) - (bi === -1 ? categoryOrder.length : bi);
     return a.localeCompare(b);
   });
+
   if (categoryBoard) categoryBoard.innerHTML = categoryNames.map(category => {
-    const items = Object.values(categoryGroups[category]).sort((a,b) => { const da = fifoDateKey(a.productionDate), db = fifoDateKey(b.productionDate); if (da !== db) return da < db ? -1 : 1; return a.product.localeCompare(b.product) || a.unit.localeCompare(b.unit); });
-    const categoryTotals = {};
-    items.forEach(item => { categoryTotals[item.unit] = (categoryTotals[item.unit] || 0) + item.volume; });
-    const totalsText = Object.entries(categoryTotals).map(([unit,total]) => `${total.toLocaleString(undefined,{maximumFractionDigits:2})} ${escapeBlastHtml(unit)}`).join(" · ") || "0";
-    return `<div style="background:#fff;border:1px solid #fed7aa;border-radius:8px;padding:11px 12px"><div style="font-size:13px;font-weight:900;letter-spacing:.4px;color:#c2410c;margin-bottom:8px">${escapeBlastHtml(category).toUpperCase()}</div><div style="display:grid;grid-template-columns:minmax(0,1.2fr) minmax(90px,.8fr) minmax(120px,1fr);gap:8px;padding:6px 0;font-size:11px;font-weight:800;color:#9a3412;border-bottom:1px solid #fed7aa"><span>Product</span><span>Volume</span><span>Production Date</span></div>${items.map(item => `<div style="display:grid;grid-template-columns:minmax(0,1.2fr) minmax(90px,.8fr) minmax(120px,1fr);gap:8px;padding:7px 0;border-bottom:1px solid #ffedd5;font-size:13px;align-items:start"><span style="font-weight:700;overflow-wrap:anywhere">${escapeBlastHtml(item.product)}</span><span style="font-weight:600;overflow-wrap:anywhere">${item.volume.toLocaleString(undefined,{maximumFractionDigits:2})} ${escapeBlastHtml(item.unit)}</span><span style="color:#64748b;overflow-wrap:anywhere">${escapeBlastHtml(item.productionDate)}</span></div>`).join("")}<div style="font-size:13px;font-weight:800;color:#7c2d12;background:#ffedd5;border-radius:6px;padding:7px 8px;margin-top:8px">Total Available Inventory: ${totalsText}</div></div>`;
+    const items = Object.values(categoryGroups[category]).sort((a,b) => {
+      const da = fifoDateKey(a.productionDate), db = fifoDateKey(b.productionDate);
+      if (da !== db) return da < db ? -1 : 1;
+      return a.product.localeCompare(b.product);
+    });
+    const catPacks = items.reduce((s, it) => s + (it.packs || 0), 0);
+    const catKg = items.reduce((s, it) => s + (it.volume || 0), 0);
+    const totalsText = `${catPacks > 0 ? catPacks.toLocaleString() + ' packs · ' : ''}${catKg.toLocaleString(undefined,{minimumFractionDigits:1,maximumFractionDigits:2})} kg`;
+
+    return `<div style="background:#fff;border:1px solid #fed7aa;border-radius:8px;padding:11px 12px;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:900;letter-spacing:.4px;color:#c2410c;margin-bottom:8px">${escapeBlastHtml(category).toUpperCase()}</div>
+      <div style="display:grid;grid-template-columns:minmax(0,1.2fr) minmax(130px,1fr) minmax(110px,.9fr);gap:8px;padding:6px 0;font-size:11px;font-weight:800;color:#9a3412;border-bottom:1px solid #fed7aa">
+        <span>Product</span><span>Packs &amp; Kilos</span><span>Production Date</span>
+      </div>
+      ${items.map(item => `
+        <div style="display:grid;grid-template-columns:minmax(0,1.2fr) minmax(130px,1fr) minmax(110px,.9fr);gap:8px;padding:7px 0;border-bottom:1px solid #ffedd5;font-size:13px;align-items:center">
+          <span style="font-weight:700;overflow-wrap:anywhere">${escapeBlastHtml(item.product)}</span>
+          <span style="font-weight:600;overflow-wrap:anywhere">
+            ${item.packs > 0 ? `<b style="color:#1e3a8a">${item.packs.toLocaleString()} packs</b> <small style="color:#0f766e">(${item.volume.toLocaleString(undefined,{maximumFractionDigits:1})} kg)</small>` : `${item.volume.toLocaleString(undefined,{maximumFractionDigits:2})} kg`}
+          </span>
+          <span style="color:#64748b;overflow-wrap:anywhere">${escapeBlastHtml(item.productionDate)}</span>
+        </div>
+      `).join("")}
+      <div style="font-size:13px;font-weight:800;color:#7c2d12;background:#ffedd5;border-radius:6px;padding:7px 8px;margin-top:8px">Total Available: ${totalsText}</div>
+    </div>`;
   }).join("");
+
   if (categoryEmpty) categoryEmpty.style.display = categoryNames.length ? "none" : "block";
   renderBlastHistory();
 }
+
 function parseQueueVolume(raw) {
   const text = String(raw ?? "").trim().replace(/,/g, "");
   const match = text.match(/^([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]+)?$/);
@@ -5425,45 +5508,204 @@ function parseQueueVolume(raw) {
     const normalized = unit.toLowerCase();
     if (["kgs", "kilogram", "kilograms"].includes(normalized)) unit = "kg";
     else if (["mts", "ton", "tons", "tonne", "tonnes", "metricton", "metrictons"].includes(normalized)) unit = "MT";
-    else if (normalized === "box") unit = "boxes";
-    else if (normalized === "case") unit = "cases";
+    else if (["box", "boxes"].includes(normalized)) unit = "boxes";
+    else if (["case", "cases"].includes(normalized)) unit = "cases";
+    else if (["pack", "packs", "pk", "pks", "pc", "pcs"].includes(normalized)) unit = "packs";
   }
   return { amount: Number(match[1]), unit };
 }
+
 function applyBlastInventoryDeductions(deductions) {
   const rows = getBlastInventory();
   deductions.forEach(d => {
     let remaining = d.amount;
-    // Deduct across matching inventory entries until the requested volume is covered.
+    const isPacksDeduction = (d.unit === "packs");
+
     for (const row of rows) {
       if (remaining <= 0) break;
       if (!stockMatches(row, d.product, d.productionDate)) continue;
-      if (String(row.unit || "").trim().toLowerCase() !== String(d.unit || "").trim().toLowerCase()) continue;
-      const stock = Math.max(0, stockQty(row));
-      const take = Math.min(stock, remaining);
-      row.volume = Math.round((stock - take + Number.EPSILON) * 100) / 100;
+
+      const currentStock = isPacksDeduction ? Math.max(0, Number(row.packs || 0)) : Math.max(0, stockQty(row));
+      if (currentStock <= 0) continue;
+
+      const take = Math.min(currentStock, remaining);
+      const ratio = currentStock > 0 ? (take / currentStock) : 1;
+
+      if (isPacksDeduction) {
+        row.packs = Math.max(0, Math.round(currentStock - take));
+        const currentKg = Math.max(0, Number(row.volume || 0));
+        const kgDeduct = currentKg * ratio;
+        row.volume = Math.max(0, Math.round((currentKg - kgDeduct + Number.EPSILON) * 100) / 100);
+      } else {
+        const currentKg = Math.max(0, stockQty(row));
+        row.volume = Math.max(0, Math.round((currentKg - take + Number.EPSILON) * 100) / 100);
+        if (row.packs) {
+          const packDeduct = Math.round(Number(row.packs) * ratio);
+          row.packs = Math.max(0, Number(row.packs) - packDeduct);
+        }
+      }
       remaining = Math.round((remaining - take + Number.EPSILON) * 100) / 100;
     }
-    const remainingStock = rows.filter(r => stockMatches(r, d.product, d.productionDate) && String(r.unit || "").trim().toLowerCase() === String(d.unit || "").trim().toLowerCase()).reduce((sum,r)=>sum+stockQty(r),0);
-    addBlastHistory({type:"DEDUCTION",product:d.product,volume:d.amount,unit:d.unit,remaining:remainingStock,queue:(window.lastRegisteredTruck && window.lastRegisteredTruck.queue) || "New queue",shift:(window.lastRegisteredTruck && window.lastRegisteredTruck.queueShift) || "",details:"Deducted when product was added to Product Queuing for Blast"});
+
+    const remainingStock = rows.filter(r => stockMatches(r, d.product, d.productionDate)).reduce((sum, r) => sum + stockQty(r), 0);
+    const remainingPacks = rows.filter(r => stockMatches(r, d.product, d.productionDate)).reduce((sum, r) => sum + Number(r.packs || 0), 0);
+
+    addBlastHistory({
+      type: "DEDUCTION",
+      product: d.product,
+      volume: d.amount,
+      unit: d.unit || "kg",
+      packs: isPacksDeduction ? d.amount : 0,
+      remaining: remainingStock,
+      remainingPacks: remainingPacks,
+      queue: (window.lastRegisteredTruck && window.lastRegisteredTruck.queue) || "New queue",
+      shift: (window.lastRegisteredTruck && window.lastRegisteredTruck.queueShift) || "",
+      details: "Deducted when product was added to Product Queuing for Blast" + (remainingPacks > 0 ? " (" + remainingPacks.toLocaleString() + " packs remaining)" : "")
+    });
   });
-  // Keep zero-stock rows visible so users can see the original registered products.
   saveBlastInventory(rows);
 }
-function escapeBlastHtml(value) { return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
-document.getElementById("blastInventoryForm").addEventListener("submit", function(e) {
-  e.preventDefault(); const rows = getBlastInventory();
-  const entry = {date:document.getElementById("blastLogDate").value,productionDate:document.getElementById("blastLogProductionDate").value.trim(),product:document.getElementById("blastLogProduct").value.trim(),volume:Number(document.getElementById("blastLogVolume").value),unit:document.getElementById("blastLogUnit").value,category:document.getElementById("blastLogCategory").value,createdAt:new Date().toISOString()};
-  rows.unshift(entry); addBlastHistory({type:"REGISTER",product:entry.product,volume:entry.volume,unit:entry.unit,remaining:rows.filter(r=>String(r.product).toLowerCase()===entry.product.toLowerCase()&&r.unit===entry.unit).reduce((sum,r)=>sum+Number(r.volume||0),0),details:"Category: " + entry.category});
-  saveBlastInventory(rows); this.reset(); document.getElementById("blastLogDate").value = new Date().toISOString().slice(0,10); renderBlastInventory();
-});
-function deleteBlastInventory(index) { if (!confirm("Delete this inventory entry?")) return; const rows = getBlastInventory(); const removed = rows[index]; rows.splice(index,1); saveBlastInventory(rows); if (removed) addBlastHistory({type:"DEDUCTION",product:removed.product,volume:removed.volume,unit:removed.unit,remaining:rows.filter(r=>String(r.product).toLowerCase()===String(removed.product).toLowerCase()&&r.unit===removed.unit).reduce((sum,r)=>sum+Number(r.volume||0),0),shift:removed.shift,details:"Inventory entry deleted manually"}); renderBlastInventory(); }
-function resetBlastInventory() { if (!confirm("Reset ALL Blast Product Log & Inventory entries and clear inventory movement history? This cannot be undone. This will not delete existing queue records.")) return; localStorage.removeItem(BLAST_INVENTORY_KEY); localStorage.removeItem(BLAST_HISTORY_KEY); renderBlastInventory(); alert("Blast Product Log & Inventory has been reset. You can register products again."); }
-function exportBlastInventory() { const rows = getBlastInventory(); const headers = ["Production Date","Registered At","Product","Available Volume","Unit","Category"]; const csv = [headers,...rows.map(r=>[r.productionDate || r.date,formatBlastTimestamp(r.createdAt),r.product,r.volume,r.unit,r.category || r.notes || ""]) ].map(row=>row.map(v=>'"'+String(v ?? "").replace(/"/g,'""')+'"').join(",")).join("\r\n"); const blob = new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8;"}); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href=url; a.download="Blast_Product_Inventory.csv"; a.click(); URL.revokeObjectURL(url); }
-function exportBlastHistory() { const rows = getBlastHistory(); const headers = ["Date & Time","Activity","Product","Volume Change","Unit","Remaining Stock","Shift","Queue","Details"]; const csv = [headers,...rows.map(h=>[formatBlastTimestamp(h.timestamp),h.type,h.product,(h.type === "DEDUCTION" ? "-" : "+") + Number(h.volume||0),h.unit,h.remaining,h.shift,h.queue,h.details])].map(row=>row.map(v=>'"'+String(v ?? "").replace(/"/g,'""')+'"').join(",")).join("\r\n"); const blob = new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8;"}); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href=url; a.download="Blast_Inventory_History.csv"; a.click(); URL.revokeObjectURL(url); }
-document.getElementById("blastLogDate").value = new Date().toISOString().slice(0,10);
-renderBlastInventory();
 
+function escapeBlastHtml(value) { return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+// Handle Form Submission for Blast Product Log & Inventory (Both Packs and Equivalent Kilos manually typed)
+const blastFormEl = document.getElementById("blastInventoryForm");
+if (blastFormEl) {
+  blastFormEl.addEventListener("submit", function(e) {
+    e.preventDefault();
+    const rows = getBlastInventory();
+    const packs = Number(document.getElementById("blastLogPacks").value) || 0;
+    const volume = Number(document.getElementById("blastLogVolume").value) || 0;
+    const category = document.getElementById("blastLogCategory").value;
+
+    const entry = {
+      date: document.getElementById("blastLogDate").value,
+      productionDate: document.getElementById("blastLogProductionDate").value.trim(),
+      product: document.getElementById("blastLogProduct").value.trim(),
+      packs: packs,
+      volume: volume,
+      unit: "kg",
+      category: category,
+      createdAt: new Date().toISOString()
+    };
+
+    rows.unshift(entry);
+
+    const remKg = rows.filter(r => String(r.product).toLowerCase() === entry.product.toLowerCase()).reduce((sum, r) => sum + Number(r.volume || 0), 0);
+    const remPacks = rows.filter(r => String(r.product).toLowerCase() === entry.product.toLowerCase()).reduce((sum, r) => sum + Number(r.packs || 0), 0);
+
+    addBlastHistory({
+      type: "REGISTER",
+      product: entry.product,
+      packs: entry.packs,
+      volume: entry.volume,
+      unit: "kg",
+      remaining: remKg,
+      remainingPacks: remPacks,
+      details: "Category: " + entry.category + (entry.packs > 0 ? " (" + entry.packs.toLocaleString() + " packs)" : "")
+    });
+
+    saveBlastInventory(rows);
+    this.reset();
+    document.getElementById("blastLogDate").value = new Date().toISOString().slice(0, 10);
+    renderBlastInventory();
+  });
+}
+
+function deleteBlastInventory(index) {
+  if (!confirm("Delete this inventory entry?")) return;
+  const rows = getBlastInventory();
+  const removed = rows[index];
+  rows.splice(index, 1);
+  saveBlastInventory(rows);
+  if (removed) {
+    const remKg = rows.filter(r => String(r.product).toLowerCase() === String(removed.product).toLowerCase()).reduce((sum, r) => sum + Number(r.volume || 0), 0);
+    const remPacks = rows.filter(r => String(r.product).toLowerCase() === String(removed.product).toLowerCase()).reduce((sum, r) => sum + Number(r.packs || 0), 0);
+    addBlastHistory({
+      type: "DEDUCTION",
+      product: removed.product,
+      volume: removed.volume,
+      packs: removed.packs,
+      unit: removed.unit || "kg",
+      remaining: remKg,
+      remainingPacks: remPacks,
+      shift: removed.shift,
+      details: "Inventory entry deleted manually"
+    });
+  }
+  renderBlastInventory();
+}
+
+function resetBlastInventory() {
+  if (!confirm("Reset ALL Blast Product Log & Inventory entries and clear inventory movement history? This cannot be undone. This will not delete existing queue records.")) return;
+  localStorage.removeItem(BLAST_INVENTORY_KEY);
+  localStorage.removeItem(BLAST_HISTORY_KEY);
+  renderBlastInventory();
+  alert("Blast Product Log & Inventory has been reset. You can register products again.");
+}
+
+function exportBlastInventory() {
+  const rows = getBlastInventory();
+  const headers = ["Production Date", "Registered At", "Product", "Quantity in Packs", "Equivalent Kilos (kg)", "Category"];
+  const csv = [headers, ...rows.map(r => [
+    r.productionDate || r.date,
+    formatBlastTimestamp(r.createdAt),
+    r.product,
+    r.packs ?? "",
+    r.volume ?? "",
+    r.category || r.notes || ""
+  ])].map(row => row.map(v => '"' + String(v ?? "").replace(/"/g, '""') + '"').join(",")).join("\r\n");
+
+  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "Blast_Product_Inventory.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportBlastHistory() {
+  const rows = getBlastHistory();
+  const headers = ["Date & Time", "Activity", "Product", "Packs", "Volume Change (kg)", "Remaining Packs", "Remaining Stock (kg)", "Shift", "Queue", "Details"];
+  const csv = [headers, ...rows.map(h => [
+    formatBlastTimestamp(h.timestamp),
+    h.type,
+    h.product,
+    h.packs ? ((h.type === "DEDUCTION" ? "-" : "+") + h.packs) : "",
+    (h.type === "DEDUCTION" ? "-" : "+") + Number(h.volume || 0),
+    h.remainingPacks ?? "",
+    h.remaining ?? "",
+    h.shift ?? "",
+    h.queue ?? "",
+    h.details ?? ""
+  ])].map(row => row.map(v => '"' + String(v ?? "").replace(/"/g, '""') + '"').join(",")).join("\r\n");
+
+  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "Blast_Inventory_History.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function initBlastDate() {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const todayStr = `${year}-${month}-${day}`;
+  const blastDateEl = document.getElementById("blastLogDate");
+  if (blastDateEl && !blastDateEl.value) blastDateEl.value = todayStr;
+  const blastProdDateEl = document.getElementById("blastLogProductionDate");
+  if (blastProdDateEl && !blastProdDateEl.value) blastProdDateEl.value = todayStr;
+}
+initBlastDate();
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initBlastDate);
+}
+renderBlastInventory();
 
 
 
