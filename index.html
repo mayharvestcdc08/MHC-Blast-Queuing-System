@@ -2528,10 +2528,9 @@ setInterval(function() { if (typeof updateClock === "function") updateClock(); }
 <div class="form-group"><label for="queueShift">Shift *</label><select id="queueShift" required><option value="">Select shift</option><option value="Day Shift">Day Shift</option><option value="Mid Shift">Mid Shift</option><option value="Night Shift">Night Shift</option></select></div>
 <div class="form-group full"><label>Products to Load *</label><p style="margin:0 0 10px;color:#64748b;font-size:13px;">Add multiple products here. All products submitted together will share ONE queue number and move together in the Blast Freezing Dashboard.</p>
 <div id="productEntries">
-  <div class="product-entry" style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1fr auto;gap:10px;align-items:end;margin-bottom:10px;padding:12px;border:1px solid #d6e2ef;border-radius:8px;">
+  <div class="product-entry" style="display:grid;grid-template-columns:2fr 1fr 1.2fr auto;gap:10px;align-items:end;margin-bottom:10px;padding:12px;border:1px solid #d6e2ef;border-radius:8px;">
     <div class="form-group"><label>Product *</label><input class="product-name" type="text" placeholder="Enter or select product" list="availableProductList" required autocomplete="off"></div>
-    <div class="form-group"><label>Volume *</label><input class="product-volume" type="text" placeholder="Example: 5,000 kg" required autocomplete="off"></div>
-    <div class="form-group"><label>Product Temperature (°C) *</label><input class="product-temperature" type="number" step="0.1" placeholder="4.0" required></div>
+    <div class="form-group"><label>Volume *</label><input class="product-volume" type="text" placeholder="Example: 5,000 kg or 500 packs" required autocomplete="off"></div>
     <div class="form-group"><label>Production Date *</label><input class="product-production-date" type="date" required></div>
     <button class="btn-secondary remove-product-btn" type="button" onclick="removeProductEntry(this)" style="height:40px;display:none;">Remove</button>
   </div>
@@ -3559,10 +3558,9 @@ function addProductEntry() {
     const entries = document.getElementById("productEntries");
     const row = document.createElement("div");
     row.className = "product-entry";
-    row.style.cssText = "display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1fr auto;gap:10px;align-items:end;margin-bottom:10px;padding:12px;border:1px solid #d6e2ef;border-radius:8px;";
+    row.style.cssText = "display:grid;grid-template-columns:2fr 1fr 1.2fr auto;gap:10px;align-items:end;margin-bottom:10px;padding:12px;border:1px solid #d6e2ef;border-radius:8px;";
     row.innerHTML = `<div class="form-group"><label>Product *</label><input class="product-name" type="text" placeholder="Enter or select product" list="availableProductList" required autocomplete="off"></div>
-      <div class="form-group"><label>Volume *</label><input class="product-volume" type="text" placeholder="Example: 5,000 kg" required autocomplete="off"></div>
-      <div class="form-group"><label>Product Temperature (°C) *</label><input class="product-temperature" type="number" step="0.1" placeholder="4.0" required></div>
+      <div class="form-group"><label>Volume *</label><input class="product-volume" type="text" placeholder="Example: 5,000 kg or 500 packs" required autocomplete="off"></div>
       <div class="form-group"><label>Production Date *</label><input class="product-production-date" type="date" required></div>
       <button class="btn-secondary remove-product-btn" type="button" onclick="removeProductEntry(this)" style="height:40px;">Remove</button>`;
     entries.appendChild(row);
@@ -3694,12 +3692,15 @@ document.getElementById("registrationForm").addEventListener("submit", function(
     const dateShift = queueDate + " / " + queueShift;
     const recorderChecker = document.getElementById("recorderChecker").value.trim();
     const priority = document.getElementById("priority").value;
-    const products = Array.from(document.querySelectorAll("#productEntries .product-entry")).map(row => ({
-        product: row.querySelector(".product-name").value.trim(),
-        volume: row.querySelector(".product-volume").value.trim(),
-        productTemperature: row.querySelector(".product-temperature").value,
-        productionDate: row.querySelector(".product-production-date").value
-    }));
+    const products = Array.from(document.querySelectorAll("#productEntries .product-entry")).map(row => {
+        const tempEl = row.querySelector(".product-temperature");
+        return {
+            product: row.querySelector(".product-name").value.trim(),
+            volume: row.querySelector(".product-volume").value.trim(),
+            productTemperature: tempEl ? tempEl.value : "",
+            productionDate: row.querySelector(".product-production-date").value
+        };
+    });
 
     // Each registered product becomes "For Blast" inventory: keep its numeric volume so it can be split across blasts.
     products.forEach(p => { const pv = parseQueueVolume(p.volume); if (pv) { p.amount = pv.amount; p.unit = pv.unit; } p.allocated = 0; });
@@ -3780,13 +3781,13 @@ document.getElementById("registrationForm").addEventListener("submit", function(
     document.getElementById("newQueueNumber").textContent = record.queue;
     document.getElementById("newTicketInfo").innerHTML = "<strong>Queue:</strong> " + escapeHTML(record.queue) +
         "<br><strong>Products in this queue:</strong><br>" + products.map(p => escapeHTML(p.product) +
-        " — " + escapeHTML(p.volume) + " — " + escapeHTML(p.productTemperature) + " °C — Production: " + escapeHTML(p.productionDate)).join("<br>") +
+        " — " + escapeHTML(p.volume) + (p.productTemperature ? " — " + escapeHTML(p.productTemperature) + " °C" : "") + " — Production: " + escapeHTML(p.productionDate)).join("<br>") +
         "<br><strong>Prioritization:</strong> " + escapeHTML(priority) + "<br><strong>Date:</strong> " + escapeHTML(queueDate) + "<br><strong>Shift:</strong> " + escapeHTML(queueShift) +
         "<br><strong>Blast Receiver/Recorder:</strong> " + escapeHTML(recorderChecker);
     document.getElementById("registrationSuccess").classList.add("show");
     window.lastRegisteredTruck = record;
     document.getElementById("registrationForm").reset();
-    document.getElementById("productEntries").innerHTML = `<div class="product-entry" style="display:grid;grid-template-columns:2fr 1fr 1fr 1.2fr 1fr auto;gap:10px;align-items:end;margin-bottom:10px;padding:12px;border:1px solid #d6e2ef;border-radius:8px;"><div class="form-group"><label>Product *</label><input class="product-name" type="text" placeholder="Enter product name" required autocomplete="off"></div><div class="form-group"><label>Volume *</label><input class="product-volume" type="text" placeholder="Example: 5,000 kg" required autocomplete="off"></div><div class="form-group"><label>Product Temperature (°C) *</label><input class="product-temperature" type="number" step="0.1" placeholder="4.0" required></div><div class="form-group"><label>Production Date *</label><input class="product-production-date" type="date" required></div><button class="btn-secondary remove-product-btn" type="button" onclick="removeProductEntry(this)" style="height:40px;display:none;">Remove</button></div>`;
+    document.getElementById("productEntries").innerHTML = `<div class="product-entry" style="display:grid;grid-template-columns:2fr 1fr 1.2fr auto;gap:10px;align-items:end;margin-bottom:10px;padding:12px;border:1px solid #d6e2ef;border-radius:8px;"><div class="form-group"><label>Product *</label><input class="product-name" type="text" placeholder="Enter or select product" list="availableProductList" required autocomplete="off"></div><div class="form-group"><label>Volume *</label><input class="product-volume" type="text" placeholder="Example: 5,000 kg or 500 packs" required autocomplete="off"></div><div class="form-group"><label>Production Date *</label><input class="product-production-date" type="date" required></div><button class="btn-secondary remove-product-btn" type="button" onclick="removeProductEntry(this)" style="height:40px;display:none;">Remove</button></div>`;
     updateStats(); renderQueue();
 });
 
