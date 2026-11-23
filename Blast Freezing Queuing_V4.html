@@ -3605,10 +3605,10 @@ function stockMatches(stock, product, productionDate) {
 // Production Date is entered directly by the user. Availability is checked
 // against Blast Product Log & Inventory using the exact product + date.
 function checkProductProductionDate(row, showAlert = false) {
-    if (!row) return false;
+    if (!row) return true;
     const productInput = row.querySelector(".product-name");
     const dateInput = row.querySelector(".product-production-date");
-    if (!productInput || !dateInput) return false;
+    if (!productInput || !dateInput) return true;
 
     const productName = productInput.value.trim();
     const productionDate = dateInput.value;
@@ -3622,12 +3622,12 @@ function checkProductProductionDate(row, showAlert = false) {
 
     if (!productName) {
         message.textContent = "";
-        return false;
+        dateInput.setCustomValidity("");
+        return true;
     }
 
     const allMatching = getBlastInventory().filter(stock =>
-        normProductName(stock.product) === normProductName(productName) &&
-        (stockQty(stock) > 0 || (Number(stock.packs) || 0) > 0)
+        normProductName(stock.product) === normProductName(productName)
     );
 
     if (!productionDate) {
@@ -3635,33 +3635,36 @@ function checkProductProductionDate(row, showAlert = false) {
             const totalKg = allMatching.reduce((s, st) => s + stockQty(st), 0);
             const totalPacks = allMatching.reduce((s, st) => s + (Number(st.packs) || 0), 0);
             const dates = [...new Set(allMatching.map(st => stockProdDate(st)))];
-            message.textContent = "ℹ In Stock: " + (totalPacks > 0 ? (totalPacks.toLocaleString() + " packs (" + totalKg.toLocaleString() + " kg)") : (totalKg.toLocaleString() + " kg")) +
-                " · Select Production Date: " + dates.join(", ");
+            message.textContent = "ℹ In Stock: " + (totalPacks !== 0 ? (totalPacks.toLocaleString() + " packs (" + totalKg.toLocaleString() + " kg)") : (totalKg.toLocaleString() + " kg")) +
+                (dates.length ? " · Suggested Production Date: " + dates.join(", ") : "");
             message.style.color = "#0284c7";
         } else {
-            message.textContent = "⚠ Product not found in Blast Inventory.";
-            message.style.color = "#dc2626";
+            message.textContent = "ℹ Stand-Alone Queue: Wala pa sa inventory (papayagan pa rin sa blast queue)";
+            message.style.color = "#0284c7";
         }
-        return false;
+        dateInput.setCustomValidity("");
+        return true;
     }
 
     const matchingStock = allMatching.filter(stock => stockProdDate(stock) === normDateStr(productionDate));
     const available = matchingStock.reduce((sum, stock) => sum + stockQty(stock), 0);
     const availPacks = matchingStock.reduce((sum, stock) => sum + (Number(stock.packs) || 0), 0);
 
-    if (!matchingStock.length || (available <= 0 && availPacks <= 0)) {
-        const otherDates = [...new Set(allMatching.map(st => stockProdDate(st)))];
-        message.textContent = "⚠ No available product for this Production Date." +
-            (otherDates.length ? " Available Production Date(s) for " + productName + ": " + otherDates.join(", ") : "");
-        message.style.color = "#dc2626";
-        dateInput.setCustomValidity("No available product for this Production Date.");
-        if (showAlert) alert("No available product for this Production Date. Please check Blast Product Log & Inventory.");
-        return false;
+    if (matchingStock.length && (available > 0 || availPacks > 0)) {
+        message.textContent = "✓ In Stock: " +
+            (availPacks > 0 ? (availPacks.toLocaleString() + " packs (" + available.toLocaleString() + " kg)") : (available.toLocaleString() + " kg"));
+        message.style.color = "#15803d";
+    } else if (matchingStock.length && (available < 0 || availPacks < 0)) {
+        message.textContent = "⚠️ Deficit Stock: " +
+            (availPacks !== 0 ? (availPacks.toLocaleString() + " packs (" + available.toLocaleString() + " kg)") : (available.toLocaleString() + " kg")) +
+            " · Magdadagdag ng negative balance upang makatuloy sa blast";
+        message.style.color = "#d97706";
+    } else {
+        message.textContent = "ℹ Stand-Alone Queue: Wala sa existing inventory · Magiging negative balance upang makatuloy sa blast";
+        message.style.color = "#0284c7";
     }
 
-    message.textContent = "✓ In Stock: " +
-        (availPacks > 0 ? (availPacks.toLocaleString() + " packs (" + available.toLocaleString() + " kg)") : (available.toLocaleString() + " kg"));
-    message.style.color = "#15803d";
+    // Always valid - Stand-alone blast queuing allows processing even without inventory!
     dateInput.setCustomValidity("");
     return true;
 }
@@ -3680,11 +3683,7 @@ document.getElementById("productEntries").addEventListener("change", function(ev
 document.getElementById("forLayer").addEventListener("change", function() {
     if (this.value !== "Yes") return;
     const rows = [...document.querySelectorAll("#productEntries .product-entry")];
-    const allAvailable = rows.every(row => checkProductProductionDate(row));
-    if (!allAvailable) {
-        alert("Layering is not allowed. Enter a Production Date with available product in Blast Product Log & Inventory for every product first.");
-        this.value = "No";
-    }
+    rows.forEach(row => checkProductProductionDate(row));
 });
 
 document.getElementById("registrationForm").addEventListener("submit", function(event) {
@@ -3716,44 +3715,8 @@ document.getElementById("registrationForm").addEventListener("submit", function(
     products.forEach(p => { p.allocated = 0; });
     const inventoryBeforeQueue = getBlastInventory();
     const deductions = [];
-
     for (const item of products) {
-        if (!item.product) {
-            alert("Please enter a valid product name.");
-            return;
-        }
-        if (item.packs <= 0 && item.equivalentKg <= 0) {
-            alert(`Please enter Quantity in Packs and Equivalent Kilos for ${item.product}.`);
-            return;
-        }
-        if (!item.productionDate) {
-            alert(`Please select a Production Date for ${item.product}.`);
-            return;
-        }
-
-        const matchingRows = inventoryBeforeQueue.filter(r =>
-            stockMatches(r, item.product, item.productionDate) &&
-            (stockQty(r) > 0 || (Number(r.packs) || 0) > 0)
-        );
-
-        const availPacks = matchingRows.reduce((sum, r) => sum + (Number(r.packs) || 0), 0);
-        const availKg = matchingRows.reduce((sum, r) => sum + stockQty(r), 0);
-
-        if (!matchingRows.length || (availKg <= 0 && availPacks <= 0)) {
-            alert(`No available inventory found for ${item.product} (Production Date: ${item.productionDate}).\nPlease check Blast Product Log & Inventory.`);
-            return;
-        }
-
-        if (item.packs > 0 && availPacks > 0 && availPacks < item.packs) {
-            alert(`Insufficient inventory packs for ${item.product}.\nAvailable: ${availPacks.toLocaleString()} packs (${availKg.toLocaleString()} kg)\nRequested: ${item.packs.toLocaleString()} packs.`);
-            return;
-        }
-
-        if (item.equivalentKg > 0 && availKg > 0 && availKg < item.equivalentKg) {
-            alert(`Insufficient inventory weight for ${item.product}.\nAvailable: ${availKg.toLocaleString()} kg (${availPacks.toLocaleString()} packs)\nRequested: ${item.equivalentKg.toLocaleString()} kg.`);
-            return;
-        }
-
+        // Stand-alone queue: allow every item to proceed regardless of available inventory
         deductions.push({
             product: item.product,
             productionDate: item.productionDate,
@@ -5605,14 +5568,19 @@ function renderBlastInventory() {
   tbody.innerHTML = rows.map((r, i) => {
     const packsVal = Number(r.packs || 0);
     const kgVal = Number(r.volume || 0);
-    let stockDisplay = '';
-    if (packsVal > 0) {
-      stockDisplay = `<span style="font-size:14px;font-weight:750;color:#1e3a8a;">${packsVal.toLocaleString()} packs</span> <span style="font-size:12.5px;color:#0f766e;font-weight:650;background:#ccfbf1;padding:2px 8px;border-radius:4px;white-space:nowrap;margin-left:5px;">(${kgVal.toLocaleString(undefined, {minimumFractionDigits:1, maximumFractionDigits:2})} kg)</span>`;
+    const isNeg = packsVal < 0 || kgVal < 0;
+    let stockDisplay = "";
+    if (packsVal !== 0) {
+      const packColor = isNeg ? "#dc2626" : "#1e3a8a";
+      const kgBg = isNeg ? "#fee2e2" : "#ccfbf1";
+      const kgColor = isNeg ? "#b91c1c" : "#0f766e";
+      const badgePrefix = isNeg ? '<span style="color:#dc2626;font-size:11px;font-weight:800;display:block;margin-bottom:2px;">⚠️ NEGATIVE BALANCE</span>' : "";
+      stockDisplay = badgePrefix + `<span style="font-size:14px;font-weight:750;color:${packColor};">${packsVal.toLocaleString()} packs</span> <span style="font-size:12.5px;color:${kgColor};font-weight:650;background:${kgBg};padding:2px 8px;border-radius:4px;white-space:nowrap;margin-left:5px;">(${kgVal.toLocaleString(undefined, {minimumFractionDigits:1, maximumFractionDigits:2})} kg)</span>`;
     } else {
-      stockDisplay = `<span style="font-weight:700;">${kgVal.toLocaleString(undefined, {maximumFractionDigits:2})} ${escapeBlastHtml(r.unit || 'kg')}</span>`;
+      stockDisplay = `<span style="font-weight:700;color:${isNeg ? "#dc2626" : "inherit"}">${isNeg ? "⚠️ " : ""}${kgVal.toLocaleString(undefined, {maximumFractionDigits:2})} ${escapeBlastHtml(r.unit || "kg")}</span>`;
     }
 
-    return `<tr style="border-bottom:1px solid #e2e8f0">
+    return `<tr style="border-bottom:1px solid #e2e8f0;background:${isNeg ? "#fff5f5" : "transparent"}">`
       <td style="padding:10px">${escapeBlastHtml(r.productionDate || r.date || "—")}</td>
       <td style="padding:10px;white-space:nowrap">${escapeBlastHtml(formatBlastTimestamp(r.createdAt))}</td>
       <td style="padding:10px;font-weight:700">${escapeBlastHtml(r.product)}</td>
@@ -5723,22 +5691,47 @@ function applyBlastInventoryDeductions(deductions) {
     let remKg = Number(d.amount || 0);
     let remPacks = Number(d.packs || 0);
 
-    for (const row of rows) {
-      if (remKg <= 0 && remPacks <= 0) break;
-      if (!stockMatches(row, d.product, d.productionDate)) continue;
+    const matchingRows = rows.filter(r => stockMatches(r, d.product, d.productionDate));
 
-      const currentKg = Math.max(0, stockQty(row));
-      const currentPacks = Math.max(0, Number(row.packs || 0));
-      if (currentKg <= 0 && currentPacks <= 0) continue;
+    if (matchingRows.length > 0) {
+      // First, deduct from any matching rows with positive inventory
+      for (const row of matchingRows) {
+        if (remKg <= 0 && remPacks <= 0) break;
 
-      const takeKg = Math.min(currentKg, remKg);
-      const takePacks = Math.min(currentPacks, remPacks);
+        const currentKg = stockQty(row);
+        const currentPacks = Number(row.packs || 0);
+        if (currentKg <= 0 && currentPacks <= 0) continue;
 
-      row.volume = Math.max(0, Math.round((currentKg - takeKg + Number.EPSILON) * 100) / 100);
-      row.packs = Math.max(0, Math.round(currentPacks - takePacks));
+        const takeKg = Math.min(Math.max(0, currentKg), remKg);
+        const takePacks = Math.min(Math.max(0, currentPacks), remPacks);
 
-      remKg = Math.round((remKg - takeKg + Number.EPSILON) * 100) / 100;
-      remPacks = Math.round(remPacks - takePacks);
+        row.volume = Math.round((currentKg - takeKg + Number.EPSILON) * 100) / 100;
+        row.packs = Math.round(currentPacks - takePacks);
+
+        remKg = Math.round((remKg - takeKg + Number.EPSILON) * 100) / 100;
+        remPacks = Math.round(remPacks - takePacks);
+      }
+
+      // If requested volume exceeds available stock, drive the last matching row into negative!
+      if (remKg > 0 || remPacks > 0) {
+        const targetRow = matchingRows[matchingRows.length - 1];
+        targetRow.volume = Math.round(((Number(targetRow.volume) || 0) - remKg + Number.EPSILON) * 100) / 100;
+        targetRow.packs = Math.round((Number(targetRow.packs) || 0) - remPacks);
+      }
+    } else {
+      // Product/Production Date does not exist in inventory at all.
+      // Stand-alone queue: Auto-create an inventory record with negative stock!
+      rows.push({
+        date: d.productionDate || todayString(),
+        productionDate: d.productionDate || todayString(),
+        product: d.product,
+        packs: -Math.round(remPacks),
+        volume: -Math.round((remKg + Number.EPSILON) * 100) / 100,
+        unit: d.unit || "kg",
+        category: "Stand-Alone Queue",
+        notes: "Stand-Alone Queue (Negative Balance)",
+        createdAt: new Date().toISOString()
+      });
     }
 
     const remainingStock = rows.filter(r => stockMatches(r, d.product, d.productionDate)).reduce((sum, r) => sum + stockQty(r), 0);
@@ -5754,10 +5747,13 @@ function applyBlastInventoryDeductions(deductions) {
       remainingPacks: remainingPacks,
       queue: (window.lastRegisteredTruck && window.lastRegisteredTruck.queue) || "New queue",
       shift: (window.lastRegisteredTruck && window.lastRegisteredTruck.queueShift) || "",
-      details: "Queued for Blast Freezing" + (d.packs > 0 ? " (" + d.packs.toLocaleString() + " packs · " + Number(d.amount).toLocaleString(undefined,{minimumFractionDigits:1,maximumFractionDigits:2}) + " kg)" : "")
+      details: "Queued for Blast Freezing" + (d.packs > 0 ? " (" + d.packs.toLocaleString() + " packs · " + Number(d.amount).toLocaleString(undefined,{minimumFractionDigits:1,maximumFractionDigits:2}) + " kg)" : "") +
+               (remainingPacks < 0 || remainingStock < 0 ? " [Stand-Alone / Negative Balance]" : "")
     });
   });
+
   saveBlastInventory(rows);
+  renderBlastInventory();
   renderQueueAvailableInventory();
 }
 
