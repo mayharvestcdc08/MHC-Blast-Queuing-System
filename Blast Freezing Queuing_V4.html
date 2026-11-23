@@ -3884,7 +3884,7 @@ function assignToBlast(product, blast) {
 
 
 /* ======================================================
-   START BLAST FREEZING
+   START BLAST FREEZING (Synchronized for all products in the same Blast Freezer)
 ====================================================== */
 
 function startLoading(id) {
@@ -3900,17 +3900,36 @@ function startLoading(id) {
         return;
     }
 
-    // Start only the selected queue record. Other products assigned to the same freezer remain queued.
+    const blastName = truck.assignedBlast;
+    // Find all products assigned to this same Blast Freezer that are ready to start (status === "Called")
+    const blastPeers = trucks.filter(t => t.assignedBlast === blastName && t.status === "Called");
+    const count = blastPeers.length;
+
+    if (count > 1) {
+        const peerList = blastPeers.map(p => `• ${p.queue}: ${p.product || p.loadType || 'Product'} (${p.volume || ''})`).join('\n');
+        if (!confirm(`Simulan ang Blast Freezing para sa ${blastName}?\n\nSabay-sabay magsisimula ang ${count} produktong nakalagay sa ${blastName}:\n${peerList}`)) {
+            return;
+        }
+    }
+
     const blastStart = new Date();
-    truck.status = "Loading";
-    truck.loadingTime = blastStart.toLocaleTimeString();
-    truck.blastStartTimestamp = blastStart.toISOString();
-    // Automatically record the exact dashboard click time in the Blast Freezing activity row.
-    const activityRows = getBlastActivities(truck);
-    const blastActivity = activityRows.find(a => a.name === "Blast Freezing") || activityRows[3];
-    if (blastActivity && !blastActivity.start) blastActivity.start = new Date(blastStart.getTime() - blastStart.getTimezoneOffset() * 60000).toISOString().slice(0,16);
-    truck.completedTime = "";
-    truck.blastEndTimestamp = "";
+    const timeStr = blastStart.toLocaleTimeString();
+    const isoStr = blastStart.toISOString();
+    const localTimeIso = new Date(blastStart.getTime() - blastStart.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+
+    // Synchronize all products in this same blast freezer
+    blastPeers.forEach(peer => {
+        peer.status = "Loading";
+        peer.loadingTime = timeStr;
+        peer.blastStartTimestamp = isoStr;
+        peer.completedTime = "";
+        peer.blastEndTimestamp = "";
+
+        // Automatically record the exact dashboard click time in the Blast Freezing activity row
+        const activityRows = getBlastActivities(peer);
+        const blastActivity = activityRows.find(a => a.name === "Blast Freezing") || activityRows[3];
+        if (blastActivity) blastActivity.start = localTimeIso;
+    });
 
     saveData();
     renderQueue();
@@ -3921,19 +3940,48 @@ function startLoading(id) {
 
 
 /* ======================================================
-   COMPLETE LOADING
+   COMPLETE LOADING (Synchronized for all products in the same Blast Freezer)
 ====================================================== */
 
 function completeTruck(id) {
-
-    const truck =
-        trucks.find(
-            t => t.id === id
-        );
-
-
+    const truck = trucks.find(t => t.id === id);
     if (!truck) return;
 
+    const blastName = truck.assignedBlast;
+    const blastPeers = blastName
+        ? trucks.filter(t => t.assignedBlast === blastName && t.status === "Loading")
+        : [truck];
+
+    const count = blastPeers.length;
+    if (count > 1) {
+        const peerList = blastPeers.map(p => `• ${p.queue}: ${p.product || p.loadType || 'Product'} (${p.volume || ''})`).join('\n');
+        if (!confirm(`Tapusin ang Blast Freezing para sa ${blastName}?\n\nSabay-sabay magko-complete ang ${count} produkto sa ${blastName}:\n${peerList}`)) {
+            return;
+        }
+    }
+
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString();
+    const isoStr = now.toISOString();
+    const localTimeIso = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+
+    blastPeers.forEach(peer => {
+        peer.status = "Completed";
+        peer.completedTime = timeStr;
+        peer.blastEndTimestamp = isoStr;
+
+        // Automatically record the exact dashboard click time in the Blast Freezing activity row
+        const activityRows = getBlastActivities(peer);
+        const blastActivity = activityRows.find(a => a.name === "Blast Freezing") || activityRows[3];
+        if (blastActivity) blastActivity.end = localTimeIso;
+    });
+
+    saveData();
+    renderQueue();
+    updateStats();
+    displayCurrentTruck();
+    if (typeof renderLiveBlastBoard === "function") renderLiveBlastBoard();
+    return;
 
     truck.status =
         "Completed";
@@ -4211,51 +4259,43 @@ function renderQueue() {
     }
 
 
+    function getBlastSortIndex(blastName) {
+        if (!blastName) return 999;
+        const match = String(blastName).match(/\d+/);
+        return match ? parseInt(match[0], 10) : 99;
+    }
+
     const statusOrder = {
-
         "Called": 1,
-
         "Loading": 2,
-
         "Waiting": 3,
-
         "Completed": 4,
-
         "Harvested": 5,
-
         "Cancelled": 6
-
     };
 
-
-    list.sort(
-        (a, b) => {
-
-            if (
-                statusOrder[a.status] !==
-                statusOrder[b.status]
-            ) {
-
-                return (
-                    statusOrder[a.status] -
-                    statusOrder[b.status]
-                );
-
-            }
-
-
-            return (
-                new Date(
-                    a.arrivalTimestamp
-                ) -
-
-                new Date(
-                    b.arrivalTimestamp
-                )
-            );
-
+    list.sort((a, b) => {
+        // 1. Primary sort: Status order (Called -> Loading -> Waiting -> Completed -> Harvested -> Cancelled)
+        if (statusOrder[a.status] !== statusOrder[b.status]) {
+            return statusOrder[a.status] - statusOrder[b.status];
         }
-    );
+
+        // 2. Secondary sort: Group by assigned Blast Freezer for all active/assigned statuses
+        if (a.assignedBlast || b.assignedBlast) {
+            const blastA = a.assignedBlast || "";
+            const blastB = b.assignedBlast || "";
+            if (blastA !== blastB) {
+                if (!blastA) return 1;
+                if (!blastB) return -1;
+                const orderDiff = getBlastSortIndex(blastA) - getBlastSortIndex(blastB);
+                if (orderDiff !== 0) return orderDiff;
+                return blastA.localeCompare(blastB);
+            }
+        }
+
+        // 3. Tertiary sort: Within the same Blast Freezer or Waiting status, sort FIFO by arrival
+        return new Date(a.arrivalTimestamp) - new Date(b.arrivalTimestamp);
+    });
 
 
     renderProductQueueControl();
@@ -4314,41 +4354,37 @@ function renderQueue() {
                 }
 
 
-                if (
-                    truck.status ===
-                    "Called"
-                ) {
-
+                if (truck.status === "Called") {
+                    const blastName = truck.assignedBlast || "Blast";
+                    const sameBlastCount = list.filter(t => t.assignedBlast === truck.assignedBlast && t.status === "Called").length;
+                    const badge = sameBlastCount > 1 ? ` (${sameBlastCount} in ${blastName})` : ` (${blastName})`;
                     actions += `
-
                         <button
                             class="btn-warning"
+                            style="font-weight:800; background:#f59e0b; border-color:#d97706;"
                             onclick="startLoading(${truck.id})"
+                            title="Start blast freezing for all products assigned to ${blastName}"
                         >
-                            Start Blast Freezing
+                            ▶ Start Blast Freezing${badge}
                         </button>
-
                     `;
-
                 }
 
 
-                if (
-                    truck.status ===
-                    "Loading"
-                ) {
-
+                if (truck.status === "Loading") {
+                    const blastName = truck.assignedBlast || "Blast";
+                    const sameBlastCount = list.filter(t => t.assignedBlast === truck.assignedBlast && t.status === "Loading").length;
+                    const badge = sameBlastCount > 1 ? ` (All in ${blastName})` : "";
                     actions += `
-
                         <button
                             class="btn-success"
+                            style="font-weight:800; background:#16a34a; border-color:#15803d;"
                             onclick="completeTruck(${truck.id})"
+                            title="Complete blast freezing for all products in ${blastName}"
                         >
-                            Complete
+                            ✓ Complete${badge}
                         </button>
-
                     `;
-
                 }
 
 
@@ -4408,7 +4444,7 @@ function renderQueue() {
                         <td>${escapeHTML(truck.productionDate || truck.destination || "-")}</td>
                         <td>${escapeHTML(truck.recorderChecker || truck.driverName || "-")}</td>
                         <td>${truck.isForLayer ? "YES" : "—"}</td>
-                        <td>${escapeHTML(truck.assignedBlast || "-")}</td>
+                        <td>${truck.assignedBlast ? `<span style="display:inline-block;padding:3px 8px;border-radius:6px;font-weight:800;font-size:12px;background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe;">❄️ ${escapeHTML(truck.assignedBlast)}</span>` : "—"}</td>
 
                         <td>${escapeHTML(truck.loadingTime || "-")}</td>
                         <td>${escapeHTML(truck.completedTime || "-")}</td>
