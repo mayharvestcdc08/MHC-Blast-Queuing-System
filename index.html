@@ -4463,13 +4463,52 @@ function getAllocLines(parent) {
             if (!pv || !(pv.amount > 0)) return null;
             amount = pv.amount; unit = pv.unit;
         }
-        const allocated = Number(p.allocated) || 0;
-        lines.push({ index: i, product: p.product, productionDate: p.productionDate, productTemperature: p.productTemperature, amount, unit: unit || "", allocated, remaining: r2(amount - allocated) });
+        const hasPacks = Number(p.packs) > 0;
+        const totalPacks = hasPacks ? Number(p.packs) : 0;
+        const totalKg = Number(p.equivalentKg) || (unit === "kg" ? amount : 0);
+        const kgPerPack = hasPacks && totalKg > 0 ? (totalKg / totalPacks) : 0;
+
+        let allocatedPacks = Number(p.allocatedPacks) || 0;
+        let allocatedKg = Number(p.allocated) || 0;
+        if (hasPacks && !allocatedPacks && allocatedKg > 0 && kgPerPack > 0) {
+            allocatedPacks = Math.round(allocatedKg / kgPerPack);
+        }
+
+        const remainingPacks = hasPacks ? Math.max(0, totalPacks - allocatedPacks) : 0;
+        const remainingKg = hasPacks && kgPerPack > 0 ? r2(remainingPacks * kgPerPack) : r2(amount - allocatedKg);
+        const remaining = hasPacks ? remainingPacks : r2(amount - allocatedKg);
+        const displayUnit = hasPacks ? "packs" : (unit || "");
+
+        lines.push({
+            index: i,
+            product: p.product,
+            productionDate: p.productionDate,
+            productTemperature: p.productTemperature,
+            hasPacks,
+            totalPacks,
+            allocatedPacks,
+            remainingPacks,
+            totalKg,
+            kgPerPack,
+            remainingKg,
+            amount: hasPacks ? totalPacks : amount,
+            unit: displayUnit,
+            allocated: hasPacks ? allocatedPacks : allocatedKg,
+            remaining: remaining
+        });
     }
     return lines;
 }
 function blastOptionsHTML() {
     return ["Blast 1", "Blast 2", "Blast 3", "Blast 4"].map(b => `<option value="${b}">${b}</option>`).join("");
+}
+function updateAllocEstKg(truckId, idx, kgPerPack) {
+    const inp = document.getElementById("alloc_" + truckId + "_" + idx);
+    const estEl = document.getElementById("alloc_est_" + truckId + "_" + idx);
+    if (!inp || !estEl) return;
+    const val = Number(inp.value) || 0;
+    const estKg = r2(val * kgPerPack);
+    estEl.innerHTML = `Estimated kilos: <strong>${fmtVol(estKg)} kg</strong>`;
 }
 function renderAllocPanel(truck) {
     const lines = getAllocLines(truck);
@@ -4480,14 +4519,36 @@ function renderAllocPanel(truck) {
     if (!open.length) return "";
     return `<div style="width:100%;min-width:240px;padding:8px;border:1px dashed #94a3b8;border-radius:8px;background:#f8fafc;margin:4px 0">` +
         `<div style="font-size:12px;font-weight:800;color:#334155;margin-bottom:6px">VOLUME TO PUT IN BLAST</div>` +
-        open.map(l => `<div style="margin-bottom:6px"><label style="display:block;font-size:12px;font-weight:700">${escapeHTML(l.product)} <span style="color:#64748b;font-weight:600">· remaining ${fmtVol(l.remaining)} ${escapeHTML(l.unit)}</span></label><div style="display:flex;gap:4px;align-items:center"><input type="number" id="alloc_${truck.id}_${l.index}" min="0" max="${l.remaining}" step="any" value="${l.remaining}" style="width:110px;padding:6px"> <span>${escapeHTML(l.unit)}</span></div></div>`).join("") +
-        `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><select id="blastSelect_${truck.id}" aria-label="Select blast for ${escapeHTML(truck.queue)}" style="max-width:115px;padding:7px">${blastOptionsHTML()}</select><button class="btn-primary" onclick="allocateToBlast(${truck.id})">Add to Blast</button></div></div>`;
+        open.map(l => {
+            if (l.hasPacks) {
+                return `<div style="margin-bottom:8px">` +
+                    `<label style="display:block;font-size:12px;font-weight:700">${escapeHTML(l.product)} ` +
+                        `<span style="color:#64748b;font-weight:600">· remaining <strong>${fmtVol(l.remainingPacks)} packs</strong> (${fmtVol(l.remainingKg)} kg)</span>` +
+                    `</label>` +
+                    `<div style="display:flex;gap:6px;align-items:center;margin-top:3px">` +
+                        `<input type="number" id="alloc_${truck.id}_${l.index}" min="0" max="${l.remainingPacks}" step="1" value="${l.remainingPacks}" ` +
+                            `style="width:105px;padding:6px;font-weight:700" ` +
+                            `oninput="updateAllocEstKg(${truck.id}, ${l.index}, ${l.kgPerPack})"> ` +
+                        `<span style="font-weight:700;font-size:12px;color:#334155">packs</span>` +
+                    `</div>` +
+                    `<div id="alloc_est_${truck.id}_${l.index}" style="font-size:11px;color:#0f766e;font-weight:700;margin-top:3px">` +
+                        `Estimated kilos: <strong>${fmtVol(l.remainingKg)} kg</strong>` +
+                    `</div>` +
+                `</div>`;
+            } else {
+                return `<div style="margin-bottom:6px"><label style="display:block;font-size:12px;font-weight:700">${escapeHTML(l.product)} <span style="color:#64748b;font-weight:600">· remaining ${fmtVol(l.remaining)} ${escapeHTML(l.unit)}</span></label><div style="display:flex;gap:4px;align-items:center"><input type="number" id="alloc_${truck.id}_${l.index}" min="0" max="${l.remaining}" step="any" value="${l.remaining}" style="width:110px;padding:6px"> <span>${escapeHTML(l.unit)}</span></div></div>`;
+            }
+        }).join("") +
+        `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px"><select id="blastSelect_${truck.id}" aria-label="Select blast for ${escapeHTML(truck.queue)}" style="max-width:115px;padding:7px">${blastOptionsHTML()}</select><button class="btn-primary" onclick="allocateToBlast(${truck.id})">Add to Blast</button></div></div>`;
 }
 function volumeCellHTML(truck) {
     const base = escapeHTML(truck.volume || truck.reference || "-");
     const lines = truck.status === "Waiting" ? getAllocLines(truck) : null;
     if (lines && lines.some(l => l.allocated > 0)) {
-        return base + `<br><small style="color:#b45309;font-weight:700">Remaining: ${lines.map(l => escapeHTML(l.product) + " " + fmtVol(l.remaining) + " " + escapeHTML(l.unit)).join("; ")}</small>`;
+        return base + `<br><small style="color:#b45309;font-weight:700">Remaining: ${lines.map(l => {
+            if (l.hasPacks) return escapeHTML(l.product) + " " + fmtVol(l.remainingPacks) + " packs (" + fmtVol(l.remainingKg) + " kg)";
+            return escapeHTML(l.product) + " " + fmtVol(l.remaining) + " " + escapeHTML(l.unit);
+        }).join("; ")}</small>`;
     }
     return base;
 }
@@ -4514,7 +4575,34 @@ function allocateToBlast(id) {
     parent.splitCount = (parent.splitCount || 0) + 1;
     const coversAll = parent.splitCount === 1 && lines.filter(l => l.remaining > 0).length === picks.length && picks.every(x => Math.abs(x.ln.remaining - x.v) < 0.01);
     const label = coversAll ? parent.queue : parent.queue + "-" + parent.splitCount;
-    const childProducts = picks.map(({ ln, v }) => ({ product: ln.product, volume: fmtVol(v) + (ln.unit ? " " + ln.unit : ""), productTemperature: ln.productTemperature, productionDate: ln.productionDate, amount: v, unit: ln.unit, allocated: v }));
+    const childProducts = picks.map(({ ln, v }) => {
+        if (ln.hasPacks) {
+            const childPacks = Math.round(v);
+            const childKg = ln.kgPerPack > 0 ? r2(childPacks * ln.kgPerPack) : childPacks;
+            const volStr = `${childPacks.toLocaleString()} packs (${fmtVol(childKg)} kg)`;
+            return {
+                product: ln.product,
+                packs: childPacks,
+                equivalentKg: childKg,
+                volume: volStr,
+                productTemperature: ln.productTemperature,
+                productionDate: ln.productionDate,
+                amount: childKg > 0 ? childKg : childPacks,
+                unit: childKg > 0 ? "kg" : "packs",
+                allocated: childKg
+            };
+        } else {
+            return {
+                product: ln.product,
+                volume: fmtVol(v) + (ln.unit ? " " + ln.unit : ""),
+                productTemperature: ln.productTemperature,
+                productionDate: ln.productionDate,
+                amount: v,
+                unit: ln.unit,
+                allocated: v
+            };
+        }
+    });
     const names = childProducts.map(p => p.product);
     const child = {
         id: Date.now() + Math.floor(Math.random() * 100000),
@@ -4534,7 +4622,15 @@ function allocateToBlast(id) {
         truckNumber: names.join(", "), driverName: parent.recorderChecker, company: parent.dateShift, contact: "",
         loadType: names.join(", "), destination: childProducts.map(p => p.productionDate).join(", "), reference: childProducts.map(p => p.volume).join(", ")
     };
-    picks.forEach(({ ln, v }) => { parent.products[ln.index].allocated = r2((Number(parent.products[ln.index].allocated) || 0) + v); });
+    picks.forEach(({ ln, v }) => {
+        if (ln.hasPacks) {
+            parent.products[ln.index].allocatedPacks = (Number(parent.products[ln.index].allocatedPacks) || 0) + v;
+            const childKg = ln.kgPerPack > 0 ? r2(v * ln.kgPerPack) : v;
+            parent.products[ln.index].allocated = r2((Number(parent.products[ln.index].allocated) || 0) + childKg);
+        } else {
+            parent.products[ln.index].allocated = r2((Number(parent.products[ln.index].allocated) || 0) + v);
+        }
+    });
     const after = getAllocLines(parent);
     const fullyAllocated = after && after.every(l => l.remaining <= 0.009);
     if (fullyAllocated) { parent.status = "Allocated"; parent.allocatedAt = now.toISOString(); }
@@ -4544,6 +4640,7 @@ function allocateToBlast(id) {
     alert("ADDED TO " + blast.toUpperCase() + "\n\nQueue: " + child.queue + "\nVolume: " + child.volume +
         (fullyAllocated ? "\n\nAll registered volume of " + parent.queue + " is now in blast queues." : "\n\nThe rest of " + parent.queue + " is still in For Blast Inventory."));
 }
+
 function renderForBlastInventory() {
     const body = document.getElementById("forBlastInventoryRows");
     if (!body) return;
