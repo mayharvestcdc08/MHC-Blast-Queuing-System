@@ -24,6 +24,7 @@ const freshState = () => ({
   queueDate: getPstDateString(),
   inventory: [],
   inventoryHistory: [],
+  inventoryLastUpdated: new Date().toISOString(),
   activityRows: [],
   lastUpdated: new Date().toISOString()
 });
@@ -44,6 +45,7 @@ function loadData() {
         queueDate: parsed.queueDate || getPstDateString(),
         inventory: Array.isArray(parsed.inventory) ? parsed.inventory : [],
         inventoryHistory: Array.isArray(parsed.inventoryHistory) ? parsed.inventoryHistory : [],
+        inventoryLastUpdated: parsed.inventoryLastUpdated || parsed.lastUpdated || new Date().toISOString(),
         activityRows: Array.isArray(parsed.activityRows) ? parsed.activityRows : [],
         lastUpdated: parsed.lastUpdated || new Date().toISOString()
       };
@@ -101,18 +103,25 @@ function mergeData(serverState, incoming) {
   if (Array.isArray(incoming.inventory)) {
     serverState.inventory = incoming.inventory;
   }
+  if (incoming.inventoryLastUpdated) {
+    serverState.inventoryLastUpdated = incoming.inventoryLastUpdated;
+  }
 
   // 4. Inventory History
-  if (Array.isArray(incoming.inventoryHistory) && incoming.inventoryHistory.length > 0) {
-    const hSet = new Set(serverState.inventoryHistory.map(h => h.timestamp + '_' + h.action));
-    incoming.inventoryHistory.forEach(h => {
-      const key = h.timestamp + '_' + h.action;
-      if (!hSet.has(key)) {
-        serverState.inventoryHistory.unshift(h);
-        hSet.add(key);
-      }
-    });
-    serverState.inventoryHistory = serverState.inventoryHistory.slice(0, 1000);
+  if (Array.isArray(incoming.inventoryHistory)) {
+    if (incoming.inventoryHistory.length === 0 && Array.isArray(incoming.inventory) && incoming.inventory.length === 0) {
+      serverState.inventoryHistory = [];
+    } else if (incoming.inventoryHistory.length > 0) {
+      const hSet = new Set(serverState.inventoryHistory.map(h => (h.timestamp || '') + '_' + (h.action || h.type || '')));
+      incoming.inventoryHistory.forEach(h => {
+        const key = (h.timestamp || '') + '_' + (h.action || h.type || '');
+        if (!hSet.has(key)) {
+          serverState.inventoryHistory.unshift(h);
+          hSet.add(key);
+        }
+      });
+      serverState.inventoryHistory = serverState.inventoryHistory.slice(0, 1000);
+    }
   }
 
   // 5. Activity Rows
