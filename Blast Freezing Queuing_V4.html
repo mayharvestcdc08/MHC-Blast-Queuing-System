@@ -2313,6 +2313,8 @@ setInterval(function() { if (typeof updateClock === "function") updateClock(); }
 });
 
 </script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 </head>
 
 
@@ -2916,10 +2918,30 @@ setInterval(function() { if (typeof updateClock === "function") updateClock(); }
 
 
         <button
+            class="btn-primary"
+            style="background:#dc2626; color:#fff; border:none; padding:10px 18px; font-weight:700; border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; margin-right:8px; margin-bottom:8px; box-shadow:0 1px 3px rgba(0,0,0,0.1);"
+            onclick="downloadQueueReportPDF('today')"
+            title="Download official PDF report for today's queuing batches"
+        >
+            📄 DOWNLOAD TODAY'S REPORT (PDF)
+        </button>
+
+        <button
             class="btn-success"
+            style="padding:10px 18px; font-weight:700; border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; margin-right:8px; margin-bottom:8px;"
             onclick="exportCSV()"
+            title="Export today's queuing list to CSV spreadsheet"
         >
             📥 EXPORT TODAY'S QUEUE TO CSV
+        </button>
+
+        <button
+            class="btn-primary"
+            style="background:#0284c7; color:#fff; border:none; padding:10px 18px; font-weight:700; border-radius:6px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; margin-right:8px; margin-bottom:8px; box-shadow:0 1px 3px rgba(0,0,0,0.1);"
+            onclick="downloadActivityReportPDF()"
+            title="Download blast duration and activity breakdown as PDF"
+        >
+            ⏱️ DOWNLOAD ACTIVITY REPORT (PDF)
         </button>
 
 
@@ -2936,6 +2958,50 @@ setInterval(function() { if (typeof updateClock === "function") updateClock(); }
         >
             ⏱️ DOWNLOAD ACTIVITY DURATION REPORT (TODAY)
         </button>
+
+        <!-- HISTORICAL & 6-MONTHS DATE RANGE PDF/CSV CARD -->
+        <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; padding:16px; margin-top:20px; text-align:left;">
+            <h3 style="margin:0 0 6px 0; color:#166534; font-size:15px; display:flex; align-items:center; gap:6px;">
+                🗓️ Historical &amp; Date Range Reports (6 Months+)
+            </h3>
+            <p style="margin:0 0 10px 0; font-size:12px; color:#15803d;">
+                Select a period or pick custom dates to download an official PDF audit report or CSV spreadsheet.
+            </p>
+            <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px;">
+                <button type="button" class="btn-secondary" style="padding:5px 10px; font-size:11.5px; font-weight:700;" onclick="setReportsDateRange('today')">Today</button>
+                <button type="button" class="btn-secondary" style="padding:5px 10px; font-size:11.5px; font-weight:700;" onclick="setReportsDateRange('7days')">Last 7 Days</button>
+                <button type="button" class="btn-secondary" style="padding:5px 10px; font-size:11.5px; font-weight:700;" onclick="setReportsDateRange('30days')">Last 30 Days</button>
+                <button type="button" class="btn-secondary" style="padding:5px 10px; font-size:11.5px; font-weight:700;" onclick="setReportsDateRange('90days')">Last 3 Months</button>
+                <button type="button" class="btn-secondary" style="padding:5px 10px; font-size:11.5px; font-weight:700; background:#dcfce7; border-color:#86efac; color:#166534;" onclick="setReportsDateRange('180days')">⭐ Last 6 Months</button>
+                <button type="button" class="btn-secondary" style="padding:5px 10px; font-size:11.5px; font-weight:700;" onclick="setReportsDateRange('all')">All Records (2025-Present)</button>
+            </div>
+            <div style="display:flex; align-items:flex-end; gap:10px; flex-wrap:wrap;">
+                <div>
+                    <label style="display:block; font-size:11px; font-weight:700; color:#374151; margin-bottom:2px;">Start Date</label>
+                    <input type="date" id="reportRangeStart" style="padding:7px 9px; border:1px solid #cbd5e1; border-radius:5px; font-size:12.5px;">
+                </div>
+                <div>
+                    <label style="display:block; font-size:11px; font-weight:700; color:#374151; margin-bottom:2px;">End Date</label>
+                    <input type="date" id="reportRangeEnd" style="padding:7px 9px; border:1px solid #cbd5e1; border-radius:5px; font-size:12.5px;">
+                </div>
+                <button
+                    class="btn-primary"
+                    style="background:#dc2626; color:#fff; border:none; padding:8px 16px; font-weight:700; border-radius:5px; cursor:pointer;"
+                    onclick="downloadQueueReportPDF('range')"
+                    title="Download PDF report for the selected date range"
+                >
+                    📄 DOWNLOAD RANGE (PDF)
+                </button>
+                <button
+                    class="btn-success"
+                    style="padding:8px 14px; font-weight:700; border-radius:5px; cursor:pointer;"
+                    onclick="exportRangeReportCSV()"
+                    title="Export filtered records to CSV"
+                >
+                    📥 Export Range (CSV)
+                </button>
+            </div>
+        </div>
 
 
         <hr
@@ -6168,6 +6234,343 @@ function exportAllBlastActivityReport(){
 }
 function saveBlastActivity(){const truck=trucks.find(t=>t.id===activeBlastActivityId);if(!truck)return;const existing=getBlastActivities(truck);truck.blastActivities=BLAST_ACTIVITY_NAMES.map((name,i)=>({name,start:existing[i]?.start||"",end:existing[i]?.end||"",remarks:document.getElementById(`blastActRemarks_${i}`).value.trim(),manning:document.getElementById(`blastActManning_${i}`).value.trim(),recorder:document.getElementById(`blastActRecorder_${i}`).value.trim(),blastSupervisor:document.getElementById(`blastActSupervisor_${i}`).value.trim()}));saveData();renderQueue();renderLiveBlastBoard();closeBlastActivity();alert("Blast activity log saved. Start/end timestamps are locked and cannot be edited.");}
 function renderTVActivitySummary(truck){const acts=Array.isArray(truck.blastActivities)?truck.blastActivities:[];const filled=acts.filter(a=>a.start||a.end||a.remarks||a.manning||a.recorder||a.blastSupervisor);if(!filled.length)return "";return `<div style="margin-top:8px;padding:8px;background:#172554;border-radius:8px"><strong style="color:#bfdbfe">ACTIVITY LOG</strong>${filled.map(a=>`<small style="display:block;color:#e2e8f0;margin-top:4px">${escapeHTML(a.name)} · Start: ${escapeHTML(a.start ? new Date(a.start).toLocaleString() : "-")} · End: ${escapeHTML(a.end ? new Date(a.end).toLocaleString() : "-")} · Duration: ${escapeHTML(blastActivityDuration(a.start,a.end))}${a.remarks ? " · Remarks: "+escapeHTML(a.remarks):""}${a.manning ? " · Manning: "+escapeHTML(a.manning):""}${a.recorder ? " · Recorder: "+escapeHTML(a.recorder):""}${a.blastSupervisor ? " · Blast Supervisor: "+escapeHTML(a.blastSupervisor):""}</small>`).join("")}</div>`;}
+
+
+/* =========================================================
+   PDF GENERATOR & 6-MONTH / HISTORICAL REPORTING
+========================================================= */
+
+function setReportsDateRange(range) {
+  const now = new Date();
+  const endInp = document.getElementById('reportRangeEnd');
+  const startInp = document.getElementById('reportRangeStart');
+  if (!endInp || !startInp) return;
+
+  function toStr(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  }
+
+  const endD = new Date(now);
+  let startD = new Date(now);
+
+  if (range === 'today') {
+    // start is today
+  } else if (range === '7days') {
+    startD.setDate(startD.getDate() - 6);
+  } else if (range === '30days') {
+    startD.setDate(startD.getDate() - 29);
+  } else if (range === '90days') {
+    startD.setDate(startD.getDate() - 89);
+  } else if (range === '180days') {
+    startD.setDate(startD.getDate() - 179);
+  } else if (range === 'all') {
+    startD = new Date(2025, 0, 1);
+  }
+
+  startInp.value = toStr(startD);
+  endInp.value = toStr(endD);
+}
+
+function getRangeFilteredTrucks() {
+  const startVal = document.getElementById('reportRangeStart')?.value || '';
+  const endVal = document.getElementById('reportRangeEnd')?.value || '';
+  return (trucks || []).filter(t => {
+    const d = t.date || (t.arrivalTimestamp ? t.arrivalTimestamp.slice(0, 10) : '');
+    if (startVal && d && d < startVal) return false;
+    if (endVal && d && d > endVal) return false;
+    return true;
+  }).sort((a, b) => {
+    const da = a.date || '';
+    const db = b.date || '';
+    if (da !== db) return da > db ? -1 : 1;
+    return (b.queue || 0) - (a.queue || 0);
+  });
+}
+
+function exportRangeReportCSV() {
+  const list = getRangeFilteredTrucks();
+  if (!list.length) {
+    alert("No records found for the selected date range.");
+    return;
+  }
+  const startVal = document.getElementById('reportRangeStart')?.value || 'start';
+  const endVal = document.getElementById('reportRangeEnd')?.value || 'end';
+
+  let csv = "Queue,Date,Shift,Products,Volumes,Temperature,Priority,Blast Freezer,Status,Arrival,Loading Time,Harvested Time,Receiver/Recorder\n";
+  list.forEach(t => {
+    let prods = t.product || '';
+    let vols = t.volume || '';
+    if (Array.isArray(t.products) && t.products.length) {
+      prods = t.products.map(p => p.product + (p.productionDate ? ' (' + p.productionDate + ')' : '')).join('; ');
+      vols = t.products.map(p => p.volume).join('; ');
+    }
+    csv += csvValue(t.queue) + "," +
+           csvValue(t.date) + "," +
+           csvValue(t.queueShift || t.dateShift || '') + "," +
+           csvValue(prods) + "," +
+           csvValue(vols) + "," +
+           csvValue(t.productTemperature) + "," +
+           csvValue(t.priority) + "," +
+           csvValue(t.assignedBlast || t.blast || '') + "," +
+           csvValue(t.status) + "," +
+           csvValue(t.arrival) + "," +
+           csvValue(t.loadingTime || t.loadingStart || '') + "," +
+           csvValue(t.completedTime || t.harvestedAt || '') + "," +
+           csvValue(t.recorderChecker || t.driverName || '') + "\n";
+  });
+  downloadFile("\ufeff" + csv, `MHC_Blast_Queue_Report_${startVal}_to_${endVal}.csv`, 'text/csv;charset=utf-8;');
+}
+
+function downloadQueueReportPDF(mode) {
+  let list = [];
+  let title = "Today's Blast Freezing Queue Report";
+  let sub = `Operating Date: ${todayString()}`;
+  let filenameDate = todayString();
+
+  if (mode === 'today') {
+    list = todaysTrucks();
+  } else if (mode === 'range') {
+    const s = document.getElementById('reportRangeStart')?.value || '';
+    const e = document.getElementById('reportRangeEnd')?.value || '';
+    list = getRangeFilteredTrucks();
+    title = "Historical Blast Freezing Queue Report";
+    sub = `Period: ${s || 'Start'} to ${e || 'Present'}`;
+    filenameDate = `${s || 'all'}_to_${e || 'present'}`;
+  } else {
+    list = Array.isArray(trucks) ? trucks : [];
+    title = "Complete Blast Freezing Queue Report";
+    sub = `All-Time Records (Total: ${list.length})`;
+    filenameDate = 'all_records';
+  }
+
+  if (!list.length) {
+    alert("No product queuing records found to generate PDF.");
+    return;
+  }
+
+  let totalPacks = 0;
+  let totalKg = 0;
+  let completed = 0;
+  let inBlast = 0;
+  let waiting = 0;
+
+  const rows = list.map(t => {
+    let pList = [];
+    let pPacks = 0;
+    let pKg = 0;
+
+    if (Array.isArray(t.products) && t.products.length) {
+      t.products.forEach(p => {
+        pList.push(p.product + (p.productionDate ? ' (' + p.productionDate + ')' : ''));
+        const v = parseQueueVolume(p.volume);
+        if (v) {
+          pPacks += v.packs || 0;
+          pKg += v.kg || 0;
+        }
+      });
+    } else {
+      pList.push((t.product || '-') + (t.productionDate ? ' (' + t.productionDate + ')' : ''));
+      const v = parseQueueVolume(t.volume);
+      if (v) {
+        pPacks += v.packs || 0;
+        pKg += v.kg || 0;
+      }
+    }
+
+    totalPacks += pPacks;
+    totalKg += pKg;
+
+    const st = t.status || 'Waiting';
+    if (st === 'Harvested' || st === 'Completed' || st === 'Departed') completed++;
+    else if (st === 'In Blast' || st === 'Freezing' || st === 'Loading') inBlast++;
+    else waiting++;
+
+    const volText = (pPacks > 0 ? `${fmtVol(pPacks)} packs\n` : '') + (pKg > 0 ? `(${fmtVol(pKg)} kg)` : (t.volume || '-'));
+
+    let timeText = '';
+    if (t.loadingTime || t.loadingStart) timeText += `In: ${t.loadingTime || t.loadingStart}\n`;
+    if (t.completedTime || t.harvestedAt) timeText += `Done: ${t.completedTime || t.harvestedAt}`;
+    if (!timeText) timeText = t.arrival ? `Arr: ${t.arrival}` : '-';
+
+    return [
+      t.queue || '-',
+      (t.date || '') + (t.queueShift || t.dateShift ? `\n(${t.queueShift || t.dateShift})` : ''),
+      pList.join('\n'),
+      volText,
+      t.priority || 'Branded',
+      t.assignedBlast || t.blast || '-',
+      st,
+      timeText.trim(),
+      t.recorderChecker || t.driverName || '-'
+    ];
+  });
+
+  if (window.jspdf && window.jspdf.jsPDF) {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+
+    doc.setFillColor(21, 128, 61);
+    doc.rect(0, 0, 842, 45, 'F');
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+    doc.setTextColor(255, 255, 255);
+    doc.text("MAY HARVEST CORPORATION", 30, 28);
+
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text("Blast Freezing Queuing System - Operations Report", 300, 28);
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(14);
+    doc.setTextColor(15, 23, 42);
+    doc.text(title, 30, 72);
+
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(100, 116, 139);
+    const genOn = new Date().toLocaleString();
+    doc.text(`${sub}  |  Generated on: ${genOn}`, 30, 88);
+
+    doc.setFillColor(241, 245, 249);
+    doc.roundedRect(30, 98, 782, 34, 4, 4, 'F');
+
+    doc.setFontSize(9);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`Total Batches: ${list.length}`, 45, 119);
+    const volSummary = (totalPacks > 0 ? `${fmtVol(totalPacks)} packs ` : '') + (totalKg > 0 ? `(${fmtVol(totalKg)} kg)` : '');
+    doc.text(`Total Volume: ${volSummary || '—'}`, 180, 119);
+    doc.text(`Completed: ${completed}`, 460, 119);
+    doc.text(`In Blast / Freezing: ${inBlast}`, 565, 119);
+    doc.text(`Waiting: ${waiting}`, 700, 119);
+
+    doc.autoTable({
+      startY: 142,
+      head: [["Queue #", "Date / Shift", "Product(s) & Production Date", "Volume (Packs / Kg)", "Priority", "Blast", "Status", "Cycle Times", "Recorder / Checker"]],
+      body: rows,
+      theme: 'grid',
+      styles: {
+        fontSize: 8,
+        cellPadding: 5,
+        valign: 'middle',
+        overflow: 'linebreak'
+      },
+      headStyles: {
+        fillColor: [21, 128, 61],
+        textColor: 255,
+        fontStyle: 'bold',
+        fontSize: 8.5
+      },
+      alternateRowStyles: {
+        fillColor: [248, 250, 252]
+      },
+      columnStyles: {
+        0: { cellWidth: 50, fontStyle: 'bold', halign: 'center' },
+        1: { cellWidth: 75 },
+        2: { cellWidth: 165 },
+        3: { cellWidth: 95, fontStyle: 'bold' },
+        4: { cellWidth: 60, halign: 'center' },
+        5: { cellWidth: 55, halign: 'center' },
+        6: { cellWidth: 65, halign: 'center' },
+        7: { cellWidth: 105 },
+        8: { cellWidth: 112 }
+      },
+      didDrawPage: function (data) {
+        const pageCount = doc.internal.getNumberOfPages();
+        doc.setFontSize(8);
+        doc.setTextColor(148, 163, 184);
+        doc.text(`May Harvest Corporation © ${new Date().getFullYear()} — Page ${data.pageNumber} of ${pageCount}`, 421, 575, { align: 'center' });
+      }
+    });
+
+    doc.save(`MHC_Blast_Queue_Report_${filenameDate}.pdf`);
+  } else {
+    window.print();
+  }
+}
+
+function downloadActivityReportPDF() {
+  const list = todaysTrucks().filter(t => Array.isArray(t.blastActivities) && t.blastActivities.length > 0);
+  if (!list.length) {
+    alert("No blast activity monitoring records found for today.");
+    return;
+  }
+
+  const actRows = [];
+  list.forEach(t => {
+    (t.blastActivities || []).forEach(a => {
+      if (a.start || a.end || a.remarks || a.manning) {
+        actRows.push([
+          t.queue || '-',
+          t.assignedBlast || t.blast || '-',
+          t.product || '-',
+          a.name || '-',
+          a.start ? new Date(a.start).toLocaleTimeString() : '-',
+          a.end ? new Date(a.end).toLocaleTimeString() : '-',
+          blastActivityDuration(a.start, a.end),
+          a.manning || '-',
+          a.remarks || '-'
+        ]);
+      }
+    });
+  });
+
+  if (!actRows.length) {
+    alert("No active or completed blast activity timestamps recorded yet today.");
+    return;
+  }
+
+  if (window.jspdf && window.jspdf.jsPDF) {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'pt', format: 'a4' });
+
+    doc.setFillColor(2, 132, 199);
+    doc.rect(0, 0, 842, 45, 'F');
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+    doc.setTextColor(255, 255, 255);
+    doc.text("MAY HARVEST CORPORATION", 30, 28);
+
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text("Blast Freezing Activity Duration & Timing Log", 300, 28);
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(14);
+    doc.setTextColor(15, 23, 42);
+    doc.text("Daily Blast Activity Breakdown Report", 30, 72);
+
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(100, 116, 139);
+    doc.text(`Date: ${todayString()}  |  Total Activity Logs: ${actRows.length}`, 30, 88);
+
+    doc.autoTable({
+      startY: 105,
+      head: [["Queue #", "Blast", "Product", "Activity Step", "Start Time", "End Time", "Duration", "Manning", "Remarks"]],
+      body: actRows,
+      theme: 'grid',
+      styles: { fontSize: 8, cellPadding: 5, valign: 'middle' },
+      headStyles: { fillColor: [2, 132, 199], textColor: 255, fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      didDrawPage: function (data) {
+        const pageCount = doc.internal.getNumberOfPages();
+        doc.setFontSize(8);
+        doc.setTextColor(148, 163, 184);
+        doc.text(`May Harvest Corporation © ${new Date().getFullYear()} — Page ${data.pageNumber} of ${pageCount}`, 421, 575, { align: 'center' });
+      }
+    });
+
+    doc.save(`MHC_Blast_Activity_Report_${todayString()}.pdf`);
+  } else {
+    window.print();
+  }
+}
+
 </script>
 
 
