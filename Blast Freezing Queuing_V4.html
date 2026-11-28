@@ -4463,10 +4463,23 @@ function getAllocLines(parent) {
             if (!pv || !(pv.amount > 0)) return null;
             amount = pv.amount; unit = pv.unit;
         }
-        const hasPacks = Number(p.packs) > 0;
-        const totalPacks = hasPacks ? Number(p.packs) : 0;
-        const totalKg = Number(p.equivalentKg) || (unit === "kg" ? amount : 0);
-        const kgPerPack = hasPacks && totalKg > 0 ? (totalKg / totalPacks) : 0;
+        let hasPacks = Number(p.packs) > 0;
+        let totalPacks = hasPacks ? Number(p.packs) : 0;
+        let totalKg = Number(p.equivalentKg) || (unit === "kg" ? amount : 0);
+
+        // Fallback: extract packs and kg if p.packs is not explicitly set as number but exists in p.volume
+        if (!hasPacks && typeof p.volume === 'string') {
+            const m = p.volume.match(/([0-9,]+(?:.[0-9]+)?)\s*packs?(?:\s*\(([0-9,.]+)\s*kg\))?/i);
+            if (m) {
+                totalPacks = Number(m[1].replace(/,/g, '')) || 0;
+                if (totalPacks > 0) {
+                    hasPacks = true;
+                    if (m[2]) totalKg = Number(m[2].replace(/,/g, '')) || totalKg;
+                }
+            }
+        }
+
+        const kgPerPack = hasPacks && totalPacks > 0 && totalKg > 0 ? (totalKg / totalPacks) : 0;
 
         let allocatedPacks = Number(p.allocatedPacks) || 0;
         let allocatedKg = Number(p.allocated) || 0;
@@ -4491,6 +4504,7 @@ function getAllocLines(parent) {
             totalKg,
             kgPerPack,
             remainingKg,
+            allocatedKg,
             amount: hasPacks ? totalPacks : amount,
             unit: displayUnit,
             allocated: hasPacks ? allocatedPacks : allocatedKg,
@@ -4502,13 +4516,14 @@ function getAllocLines(parent) {
 function blastOptionsHTML() {
     return ["Blast 1", "Blast 2", "Blast 3", "Blast 4"].map(b => `<option value="${b}">${b}</option>`).join("");
 }
-function updateAllocEstKg(truckId, idx, kgPerPack) {
+function updateAllocPacksChange(truckId, idx, kgPerPack) {
     const inp = document.getElementById("alloc_" + truckId + "_" + idx);
-    const estEl = document.getElementById("alloc_est_" + truckId + "_" + idx);
-    if (!inp || !estEl) return;
+    const kgInp = document.getElementById("alloc_kg_" + truckId + "_" + idx);
+    if (!inp || !kgInp) return;
     const val = Number(inp.value) || 0;
-    const estKg = r2(val * kgPerPack);
-    estEl.innerHTML = `Estimated kilos: <strong>${fmtVol(estKg)} kg</strong>`;
+    if (kgPerPack > 0) {
+        kgInp.value = r2(val * kgPerPack);
+    }
 }
 function renderAllocPanel(truck) {
     const lines = getAllocLines(truck);
@@ -4517,29 +4532,34 @@ function renderAllocPanel(truck) {
     }
     const open = lines.filter(l => l.remaining > 0);
     if (!open.length) return "";
-    return `<div style="width:100%;min-width:240px;padding:8px;border:1px dashed #94a3b8;border-radius:8px;background:#f8fafc;margin:4px 0">` +
-        `<div style="font-size:12px;font-weight:800;color:#334155;margin-bottom:6px">VOLUME TO PUT IN BLAST</div>` +
+    return `<div style="width:100%;min-width:250px;padding:10px;border:1px dashed #94a3b8;border-radius:8px;background:#f8fafc;margin:4px 0">` +
+        `<div style="font-size:12px;font-weight:800;color:#334155;margin-bottom:8px">VOLUME TO PUT IN BLAST</div>` +
         open.map(l => {
             if (l.hasPacks) {
-                return `<div style="margin-bottom:8px">` +
-                    `<label style="display:block;font-size:12px;font-weight:700">${escapeHTML(l.product)} ` +
+                return `<div style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px dotted #cbd5e1">` +
+                    `<label style="display:block;font-size:12px;font-weight:700;color:#1e293b;margin-bottom:4px">${escapeHTML(l.product)} ` +
                         `<span style="color:#64748b;font-weight:600">· remaining <strong>${fmtVol(l.remainingPacks)} packs</strong> (${fmtVol(l.remainingKg)} kg)</span>` +
                     `</label>` +
-                    `<div style="display:flex;gap:6px;align-items:center;margin-top:3px">` +
+                    `<div style="display:flex;gap:6px;align-items:center;margin-top:4px">` +
+                        `<label style="font-size:11px;font-weight:700;color:#334155;min-width:65px">Packs:</label>` +
                         `<input type="number" id="alloc_${truck.id}_${l.index}" min="0" max="${l.remainingPacks}" step="1" value="${l.remainingPacks}" ` +
-                            `style="width:105px;padding:6px;font-weight:700" ` +
-                            `oninput="updateAllocEstKg(${truck.id}, ${l.index}, ${l.kgPerPack})"> ` +
+                            `style="width:95px;padding:6px;font-weight:700;border:1px solid #94a3b8;border-radius:4px" ` +
+                            `oninput="updateAllocPacksChange(${truck.id}, ${l.index}, ${l.kgPerPack})"> ` +
                         `<span style="font-weight:700;font-size:12px;color:#334155">packs</span>` +
                     `</div>` +
-                    `<div id="alloc_est_${truck.id}_${l.index}" style="font-size:11px;color:#0f766e;font-weight:700;margin-top:3px">` +
-                        `Estimated kilos: <strong>${fmtVol(l.remainingKg)} kg</strong>` +
+                    `<div style="display:flex;gap:6px;align-items:center;margin-top:6px">` +
+                        `<label style="font-size:11px;font-weight:700;color:#0f766e;min-width:65px">Est. Kilos:</label>` +
+                        `<input type="number" id="alloc_kg_${truck.id}_${l.index}" min="0" step="any" value="${l.remainingKg}" ` +
+                            `style="width:95px;padding:6px;font-weight:700;border:1px solid #0f766e;border-radius:4px;color:#0f766e" ` +
+                            `placeholder="Manual kg"> ` +
+                        `<span style="font-weight:700;font-size:12px;color:#0f766e">kg (manual)</span>` +
                     `</div>` +
                 `</div>`;
             } else {
                 return `<div style="margin-bottom:6px"><label style="display:block;font-size:12px;font-weight:700">${escapeHTML(l.product)} <span style="color:#64748b;font-weight:600">· remaining ${fmtVol(l.remaining)} ${escapeHTML(l.unit)}</span></label><div style="display:flex;gap:4px;align-items:center"><input type="number" id="alloc_${truck.id}_${l.index}" min="0" max="${l.remaining}" step="any" value="${l.remaining}" style="width:110px;padding:6px"> <span>${escapeHTML(l.unit)}</span></div></div>`;
             }
         }).join("") +
-        `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px"><select id="blastSelect_${truck.id}" aria-label="Select blast for ${escapeHTML(truck.queue)}" style="max-width:115px;padding:7px">${blastOptionsHTML()}</select><button class="btn-primary" onclick="allocateToBlast(${truck.id})">Add to Blast</button></div></div>`;
+        `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px"><select id="blastSelect_${truck.id}" aria-label="Select blast for ${escapeHTML(truck.queue)}" style="max-width:115px;padding:7px">${blastOptionsHTML()}</select><button class="btn-primary" onclick="allocateToBlast(${truck.id})">Add to Blast</button></div></div>`;
 }
 function volumeCellHTML(truck) {
     const base = escapeHTML(truck.volume || truck.reference || "-");
@@ -4568,17 +4588,26 @@ function allocateToBlast(id) {
         const v = raw === "" ? 0 : Number(raw);
         if (!Number.isFinite(v) || v < 0) { alert("Please enter a valid volume for " + ln.product + "."); return; }
         if (v > ln.remaining + 0.0001) { alert("The volume for " + ln.product + " is more than the remaining " + fmtVol(ln.remaining) + " " + ln.unit + "."); return; }
-        if (v > 0) picks.push({ ln, v: r2(v) });
+        
+        let manualKg = null;
+        if (ln.hasPacks) {
+            const kgInp = document.getElementById("alloc_kg_" + id + "_" + ln.index);
+            const rawKg = kgInp ? String(kgInp.value).replace(/,/g, "").trim() : "";
+            if (rawKg !== "" && Number.isFinite(Number(rawKg)) && Number(rawKg) >= 0) {
+                manualKg = r2(Number(rawKg));
+            }
+        }
+        if (v > 0) picks.push({ ln, v: r2(v), manualKg });
     }
     if (!picks.length) { alert("Enter the volume to put in " + blast + " first."); return; }
     const now = new Date();
     parent.splitCount = (parent.splitCount || 0) + 1;
     const coversAll = parent.splitCount === 1 && lines.filter(l => l.remaining > 0).length === picks.length && picks.every(x => Math.abs(x.ln.remaining - x.v) < 0.01);
     const label = coversAll ? parent.queue : parent.queue + "-" + parent.splitCount;
-    const childProducts = picks.map(({ ln, v }) => {
+    const childProducts = picks.map(({ ln, v, manualKg }) => {
         if (ln.hasPacks) {
             const childPacks = Math.round(v);
-            const childKg = ln.kgPerPack > 0 ? r2(childPacks * ln.kgPerPack) : childPacks;
+            const childKg = manualKg !== null ? manualKg : (ln.kgPerPack > 0 ? r2(childPacks * ln.kgPerPack) : childPacks);
             const volStr = `${childPacks.toLocaleString()} packs (${fmtVol(childKg)} kg)`;
             return {
                 product: ln.product,
@@ -4617,15 +4646,14 @@ function allocateToBlast(id) {
         arrival: parent.arrival, arrivalTimestamp: parent.arrivalTimestamp,
         status: "Called", queueStarted: true, queueStartedAt: parent.queueStartedAt || now.toISOString(),
         assignedBlast: blast, blastQueueTime: now.toISOString(),
-        // The new blast batch keeps whatever activities were already recorded for the registered lot (e.g. Layering).
         blastActivities: JSON.parse(JSON.stringify(getBlastActivities(parent))),
         truckNumber: names.join(", "), driverName: parent.recorderChecker, company: parent.dateShift, contact: "",
         loadType: names.join(", "), destination: childProducts.map(p => p.productionDate).join(", "), reference: childProducts.map(p => p.volume).join(", ")
     };
-    picks.forEach(({ ln, v }) => {
+    picks.forEach(({ ln, v, manualKg }) => {
         if (ln.hasPacks) {
             parent.products[ln.index].allocatedPacks = (Number(parent.products[ln.index].allocatedPacks) || 0) + v;
-            const childKg = ln.kgPerPack > 0 ? r2(v * ln.kgPerPack) : v;
+            const childKg = manualKg !== null ? manualKg : (ln.kgPerPack > 0 ? r2(v * ln.kgPerPack) : v);
             parent.products[ln.index].allocated = r2((Number(parent.products[ln.index].allocated) || 0) + childKg);
         } else {
             parent.products[ln.index].allocated = r2((Number(parent.products[ln.index].allocated) || 0) + v);
@@ -4653,8 +4681,21 @@ function renderForBlastInventory() {
         lines.forEach(l => {
             const state = l.remaining <= 0 ? "All in blast" : (l.allocated > 0 ? "Partly in blast" : "Waiting for blast");
             const color = l.remaining <= 0 ? "#15803d" : (l.allocated > 0 ? "#b45309" : "#1d4ed8");
-            if (l.remaining > 0) totals[l.unit] = (totals[l.unit] || 0) + l.remaining;
-            rows.push(`<tr><td><strong>${escapeHTML(t.queue)}</strong></td><td>${escapeHTML(l.product)}</td><td>${escapeHTML(l.productionDate || "-")}</td><td>${fmtVol(l.amount)} ${escapeHTML(l.unit)}</td><td>${fmtVol(l.allocated)} ${escapeHTML(l.unit)}</td><td><strong>${fmtVol(Math.max(0, l.remaining))} ${escapeHTML(l.unit)}</strong></td><td style="font-weight:700;color:${color}">${state}</td></tr>`);
+
+            let regDisplay = `${fmtVol(l.amount)} ${escapeHTML(l.unit)}`;
+            let allocDisplay = `${fmtVol(l.allocated)} ${escapeHTML(l.unit)}`;
+            let remDisplay = `<strong>${fmtVol(Math.max(0, l.remaining))} ${escapeHTML(l.unit)}</strong>`;
+
+            if (l.hasPacks) {
+                totals["packs"] = (totals["packs"] || 0) + l.remainingPacks;
+                regDisplay = `<span style="font-weight:700">${fmtVol(l.totalPacks)} packs</span>` + (l.totalKg > 0 ? `<br><small style="color:#64748b">(${fmtVol(l.totalKg)} kg)</small>` : '');
+                allocDisplay = `<span style="font-weight:600">${fmtVol(l.allocatedPacks)} packs</span>` + (l.totalKg > 0 ? `<br><small style="color:#64748b">(${fmtVol(l.allocatedKg || r2(l.allocatedPacks * l.kgPerPack))} kg)</small>` : '');
+                remDisplay = `<strong style="color:#1e3a8a">${fmtVol(Math.max(0, l.remainingPacks))} packs</strong>` + (l.totalKg > 0 ? `<br><small style="color:#0f766e">(${fmtVol(Math.max(0, l.remainingKg))} kg)</small>` : '');
+            } else {
+                if (l.remaining > 0) totals[l.unit] = (totals[l.unit] || 0) + l.remaining;
+            }
+
+            rows.push(`<tr><td><strong>${escapeHTML(t.queue)}</strong></td><td>${escapeHTML(l.product)}</td><td>${escapeHTML(l.productionDate || "-")}</td><td>${regDisplay}</td><td>${allocDisplay}</td><td>${remDisplay}</td><td style="font-weight:700;color:${color}">${state}</td></tr>`);
         });
     });
     body.innerHTML = rows.length ? rows.join("") : `<tr><td colspan="7" style="text-align:center;padding:20px;color:#64748b">No products registered for blast today.</td></tr>`;
