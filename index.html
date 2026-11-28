@@ -6175,4 +6175,1497 @@ function renderTVActivitySummary(truck){const acts=Array.isArray(truck.blastActi
 
 </body>
 
+function renderForBlastInventory() {
+    const body = document.getElementById("forBlastInventoryRows");
+    if (!body) return;
+    const today = todayString();
+    const parents = trucks.filter(t => t.date === today && !t.parentId && t.status !== "Cancelled" && Array.isArray(t.products));
+    const rows = [], totals = {};
+    parents.forEach(t => {
+        const lines = getAllocLines(t);
+        if (!lines) return;
+        lines.forEach(l => {
+            const state = l.remaining <= 0 ? "All in blast" : (l.allocated > 0 ? "Partly in blast" : "Waiting for blast");
+            const color = l.remaining <= 0 ? "#15803d" : (l.allocated > 0 ? "#b45309" : "#1d4ed8");
+            if (l.remaining > 0) totals[l.unit] = (totals[l.unit] || 0) + l.remaining;
+            rows.push(`<tr><td><strong>${escapeHTML(t.queue)}</strong></td><td>${escapeHTML(l.product)}</td><td>${escapeHTML(l.productionDate || "-")}</td><td>${fmtVol(l.amount)} ${escapeHTML(l.unit)}</td><td>${fmtVol(l.allocated)} ${escapeHTML(l.unit)}</td><td><strong>${fmtVol(Math.max(0, l.remaining))} ${escapeHTML(l.unit)}</strong></td><td style="font-weight:700;color:${color}">${state}</td></tr>`);
+        });
+    });
+    body.innerHTML = rows.length ? rows.join("") : `<tr><td colspan="7" style="text-align:center;padding:20px;color:#64748b">No products registered for blast today.</td></tr>`;
+    const sum = document.getElementById("forBlastSummary");
+    if (sum) {
+        const entries = Object.entries(totals);
+        sum.innerHTML = entries.length ? entries.map(([unit, total]) => `<div style="background:#eff6ff;padding:10px 14px;border-radius:8px"><strong>${fmtVol(total)} ${escapeHTML(unit)}</strong><br><span style="font-size:12px">Remaining For Blast</span></div>`).join("") : `<div style="background:#f0fdf4;padding:10px 14px;border-radius:8px"><span style="font-size:13px;font-weight:700">No volume waiting for blast</span></div>`;
+    }
+}
+
+function callSpecificTruck(id) {
+
+    const truck =
+        trucks.find(
+            t => t.id === id
+        );
+
+
+    if (!truck) return;
+
+
+    // Allow up to 8 trucks (one per loading door) to be called or loading.
+    const activeTrucks =
+        todaysTrucks().filter(
+            t => t.status === "Called" || t.status === "Loading"
+        );
+
+    if (truck.status !== "Waiting") {
+        alert("This truck is not in Waiting status.");
+        return;
+    }
+
+    if (activeTrucks.length >= LOADING_DOCK_CAPACITY) {
+        alert(
+            "All 8 loading doors are occupied.\n\n" +
+            "Complete or depart a truck before calling another."
+        );
+        return;
+    }
+
+
+    truck.status =
+        "Called";
+
+
+    saveData();
+
+
+    renderQueue();
+
+    updateStats();
+
+    displayCurrentTruck();
+
+
+    alert(
+        "Calling " +
+        truck.queue +
+        " - " +
+        truck.truckNumber
+    );
+
+}
+
+
+/* ======================================================
+   CURRENT TRUCK
+====================================================== */
+
+/* ======================================================
+   PRODUCT TEMPERATURE WHILE FREEZING
+   (replaces the old "Waiting for blast" panel; the Live TV shows the latest reading)
+====================================================== */
+
+function freezingProducts() {
+    return todaysTrucks().filter(t => t.assignedBlast
+        && !["Completed", "Harvested", "Cancelled"].includes(t.status)
+        && (t.status === "Loading" || !!t.blastStartTimestamp));
+}
+
+function latestTempReading(t) {
+    const list = Array.isArray(t && t.tempReadings) ? t.tempReadings : [];
+    return list.length ? list[list.length - 1] : null;
+}
+
+function tempDecisionClass(d) { return d === "For Harvest" ? "harvest" : "extend"; }
+
+// Called from many places (Start Queue, Complete, etc.), so the old name is kept.
+function displayCurrentTruck() { renderTempPanel(); }
+
+function renderTempPanel() {
+    const sel = document.getElementById("tempTruckSelect");
+    if (!sel) return;
+    const list = freezingProducts();
+    const sig = list.map(t => t.id + ":" + t.assignedBlast + ":" + t.queue + ":" + (t.product || t.loadType || "")).join("|");
+    if (sel.dataset.sig !== sig) {
+        const keep = String(window.tempSelectedId || sel.value || "");
+        sel.innerHTML = list.length
+            ? list.map(t => `<option value="${t.id}">${escapeHTML(t.assignedBlast)} · ${escapeHTML(t.queue || "---")} · ${escapeHTML(t.product || t.loadType || "Product")}</option>`).join("")
+            : `<option value="">No product in blast freezing</option>`;
+        if (list.some(t => String(t.id) === keep)) sel.value = keep;
+        sel.dataset.sig = sig;
+    }
+    window.tempSelectedId = sel.value;
+    const has = list.length > 0;
+    ["tempValue", "tempBy", "tempDecision", "tempSaveBtn"].forEach(id => { const el = document.getElementById(id); if (el) el.disabled = !has; });
+    const t = list.find(x => String(x.id) === String(sel.value));
+    const readings = t && Array.isArray(t.tempReadings) ? t.tempReadings : [];
+    const box = document.getElementById("tempHistory");
+    if (!box) return;
+    box.innerHTML = !t
+        ? `<div class="temp-empty">No product is in blast freezing yet. Click Start Queue on a product first.</div>`
+        : readings.length
+            ? readings.slice(-5).reverse().map(r => `<div class="temp-reading ${tempDecisionClass(r.decision)}"><div><strong>${escapeHTML(String(r.temp))}&deg;C</strong> &middot; ${escapeHTML(r.decision)}</div><small>${escapeHTML(new Date(r.time).toLocaleString())} &middot; by ${escapeHTML(r.by)}</small><button type="button" class="btn-secondary" onclick="deleteFreezingTemperature(${t.id}, ${readings.indexOf(r)})">Delete</button></div>`).join("")
+            : `<div class="temp-empty">No temperature recorded yet for this product.</div>`;
+}
+
+function saveFreezingTemperature() {
+    const sel = document.getElementById("tempTruckSelect");
+    const t = trucks.find(x => String(x.id) === String(sel.value));
+    if (!t) { alert("Select the product in blast freezing first."); return; }
+    const raw = document.getElementById("tempValue").value.trim();
+    const temp = Number(raw);
+    const by = document.getElementById("tempBy").value.trim();
+    const decision = document.getElementById("tempDecision").value;
+    if (raw === "" || !Number.isFinite(temp)) { alert("Enter the product temperature (°C)."); return; }
+    if (!by) { alert("Enter the name of the person who took the temperature."); return; }
+    if (!decision) { alert("Select the decision: For Extend or For Harvest."); return; }
+    if (!Array.isArray(t.tempReadings)) t.tempReadings = [];
+    t.tempReadings.push({ time: new Date().toISOString(), temp: Math.round(temp * 100) / 100, by: by, decision: decision });
+    saveData();
+    document.getElementById("tempValue").value = "";
+    document.getElementById("tempDecision").value = "";
+    renderTempPanel();
+    renderLiveBlastBoard();
+}
+
+function deleteFreezingTemperature(id, index) {
+    const t = trucks.find(x => String(x.id) === String(id));
+    if (!t || !Array.isArray(t.tempReadings) || !t.tempReadings[index]) return;
+    if (!confirm("Delete this temperature reading?")) return;
+    t.tempReadings.splice(index, 1);
+    saveData();
+    renderTempPanel();
+    renderLiveBlastBoard();
+}
+
+
+/* ======================================================
+   STATISTICS
+====================================================== */
+
+function updateStats() {
+
+    const list =
+        todaysTrucks();
+
+
+    const waiting =
+        list.filter(
+            t =>
+                t.status ===
+                "Waiting"
+        ).length;
+
+
+    const called =
+        list.filter(
+            t =>
+                t.status ===
+                "Called"
+        ).length;
+
+
+    const loading =
+        list.filter(
+            t =>
+                t.status ===
+                "Loading"
+        ).length;
+
+
+    const completed =
+        list.filter(
+            t =>
+                t.status ===
+                "Completed"
+
+                ||
+
+                t.status ===
+                "Harvested"
+        ).length;
+
+
+    document
+        .getElementById(
+            "waitingCount"
+        )
+        .textContent =
+            waiting;
+
+
+    document
+        .getElementById(
+            "calledCount"
+        )
+        .textContent =
+            called;
+
+
+    document
+        .getElementById(
+            "loadingCount"
+        )
+        .textContent =
+            loading;
+
+
+    document
+        .getElementById(
+            "completedCount"
+        )
+        .textContent =
+            completed;
+
+
+    document
+        .getElementById(
+            "totalCount"
+        )
+        .textContent =
+            list.length;
+
+}
+
+
+/* ======================================================
+   PRINT LAST TICKET
+====================================================== */
+
+function printLastTicket() {
+
+    if (
+        !window.lastRegisteredTruck
+    ) {
+
+        alert(
+            "No recent registration found."
+        );
+
+        return;
+
+    }
+
+
+    printTicketData(
+        window.lastRegisteredTruck
+    );
+
+}
+
+
+/* ======================================================
+   PRINT CURRENT TICKET
+====================================================== */
+
+function printCurrentTicket() {
+
+    const current =
+        todaysTrucks()
+            .find(
+                truck =>
+
+                    truck.status ===
+                        "Called"
+
+                    ||
+
+                    truck.status ===
+                        "Loading"
+            );
+
+
+    if (!current) {
+
+        alert(
+            "There is no truck currently being processed."
+        );
+
+        return;
+
+    }
+
+
+    printTicketData(
+        current
+    );
+
+}
+
+
+/* ======================================================
+   PRINT TICKET BY ID
+====================================================== */
+
+function printTicket(id) {
+
+    const truck =
+        trucks.find(
+            t => t.id === id
+        );
+
+
+    if (!truck) return;
+
+
+    printTicketData(
+        truck
+    );
+
+}
+
+
+/* ======================================================
+   PREPARE PRINT
+====================================================== */
+
+function printTicketData(truck) {
+
+    document
+        .getElementById(
+            "printPlantName"
+        )
+        .textContent =
+            "MAY HARVEST CORPORATION";
+
+
+    document
+        .getElementById(
+            "printQueue"
+        )
+        .textContent =
+            truck.queue;
+
+
+    document
+        .getElementById(
+            "printDetails"
+        )
+        .innerHTML =
+            "<strong>Date:</strong> " + escapeHTML(truck.queueDate || (truck.dateShift || truck.company || "-").split(" / ")[0]) +
+            "<br><strong>Shift:</strong> " + escapeHTML(truck.queueShift || ((truck.dateShift || truck.company || "").split(" / ")[1]) || "-") +
+            "<br><strong>Product:</strong> " + escapeHTML(truck.product || truck.loadType || "-") +
+            "<br><strong>Volume:</strong> " + escapeHTML(truck.volume || truck.reference || "-") +
+            "<br><strong>Product Temperature:</strong> " + (truck.productTemperature !== undefined && truck.productTemperature !== "" ? escapeHTML(truck.productTemperature) + " °C" : "-") +
+            "<br><strong>Production Date:</strong> " + escapeHTML(truck.productionDate || truck.destination || "-") +
+            "<br><strong>Blast Receiver/Recorder:</strong> " + escapeHTML(truck.recorderChecker || truck.driverName || "-") +
+            "<br><strong>Prioritization:</strong> " + escapeHTML(truck.priority || "-") +
+            "<br><strong>Blast Freezer:</strong> " + escapeHTML(truck.assignedBlast || "Not assigned") +
+            "<br><strong>Registered:</strong> " + escapeHTML(truck.arrival || "-");
+
+
+    
+
+
+    document
+        .getElementById(
+            "printTicket"
+        )
+        .style.display =
+            "block";
+
+
+    window.print();
+
+
+    setTimeout(
+        function() {
+
+            document
+                .getElementById(
+                    "printTicket"
+                )
+                .style.display =
+                    "none";
+
+        },
+        1000
+    );
+
+}
+
+
+/* ======================================================
+   CSV EXPORT
+====================================================== */
+
+function exportCSV() {
+
+    const list =
+        todaysTrucks();
+
+
+    if (
+        list.length === 0
+    ) {
+
+        alert(
+            "There is no product queuing data to export."
+        );
+
+        return;
+
+    }
+
+
+    let csv =
+
+        "Queue,Registration Date,Queue Date,Shift,Product,Volume,Product Temperature (°C),Production Date,Blast Receiver/Recorder,Blast Freezer,Prioritization,Arrival,Status,Loading Time,Completed Time,Harvested Time\n";
+
+
+    list.forEach(
+        truck => {
+
+            csv +=
+
+                csvValue(
+                    truck.queue
+                ) + "," +
+
+                csvValue(
+                    truck.date
+                ) + "," +
+
+                csvValue(truck.queueDate || (truck.dateShift || "").split(" / ")[0]) + "," +
+                csvValue(truck.queueShift || ((truck.dateShift || "").split(" / ")[1]) || "") + "," +
+                csvValue(truck.product) + "," +
+                csvValue(truck.volume) + "," +
+                csvValue(truck.productTemperature) + "," +
+                csvValue(truck.productionDate) + "," +
+                csvValue(truck.recorderChecker) + "," +
+                csvValue(truck.assignedBlast || "") + "," +
+
+                csvValue(
+                    truck.priority
+                ) + "," +
+
+                csvValue(
+                    truck.arrival
+                ) + "," +
+
+                csvValue(
+                    truck.status
+                ) + "," +
+
+                csvValue(
+                    truck.loadingTime
+                ) + "," +
+
+                csvValue(
+                    truck.completedTime
+                ) + "," +
+
+                csvValue(
+                    truck.departedTime
+                ) +
+
+                "\n";
+
+        }
+    );
+
+
+    downloadFile(
+        csv,
+        "MHC_product_queuing_" +
+        todayString() +
+        ".csv",
+        "text/csv"
+    );
+
+}
+
+
+/* ======================================================
+   CSV VALUE
+====================================================== */
+
+function csvValue(value) {
+
+    if (
+        value === undefined ||
+        value === null
+    ) {
+
+        return "\"\"";
+
+    }
+
+
+    return (
+        "\"" +
+        String(value)
+            .replace(
+                /"/g,
+                "\"\""
+            ) +
+        "\""
+    );
+
+}
+
+
+/* ======================================================
+   BACKUP JSON
+====================================================== */
+
+function backupJSON() {
+
+    const backup = {
+
+        company:
+            "May Harvest Corporation",
+
+        system:
+            "Product Queuing System",
+
+        backupDate:
+            new Date()
+                .toISOString(),
+
+        queueNumber:
+            queueNumber,
+
+        trucks:
+            trucks
+
+    };
+
+
+    const data =
+        JSON.stringify(
+            backup,
+            null,
+            2
+        );
+
+
+    downloadFile(
+        data,
+        "MHC_product_queuing_backup_" +
+        todayString() +
+        ".json",
+        "application/json"
+    );
+
+}
+
+
+/* ======================================================
+   DOWNLOAD FILE
+====================================================== */
+
+function downloadFile(
+    data,
+    filename,
+    type
+) {
+
+    const blob =
+        new Blob(
+            [data],
+            {
+                type:
+                    type
+            }
+        );
+
+
+    const url =
+        URL.createObjectURL(
+            blob
+        );
+
+
+    const link =
+        document.createElement(
+            "a"
+        );
+
+
+    link.href =
+        url;
+
+
+    link.download =
+        filename;
+
+
+    document
+        .body
+        .appendChild(
+            link
+        );
+
+
+    link.click();
+
+
+    document
+        .body
+        .removeChild(
+            link
+        );
+
+
+    URL.revokeObjectURL(
+        url
+    );
+
+}
+
+
+/* ======================================================
+   REPORT
+====================================================== */
+
+function updateReport() {
+
+    const list =
+        todaysTrucks();
+
+
+    const waiting =
+        list.filter(
+            t =>
+                t.status ===
+                "Waiting"
+        ).length;
+
+
+    const processing =
+        list.filter(
+            t =>
+                t.status ===
+                "Loading"
+
+                ||
+
+                t.status ===
+                "Called"
+        ).length;
+
+
+    const completed =
+        list.filter(
+            t =>
+                t.status ===
+                "Completed"
+
+                ||
+
+                t.status ===
+                "Harvested"
+        ).length;
+
+
+    const cancelled =
+        list.filter(
+            t =>
+                t.status ===
+                "Cancelled"
+        ).length;
+
+
+    document
+        .getElementById(
+            "reportSummary"
+        )
+        .innerHTML =
+
+            "<strong>Company:</strong> " +
+            "May Harvest Corporation" +
+
+            "<br>" +
+
+            "<strong>System:</strong> " +
+            "Product Queuing System" +
+
+            "<br>" +
+
+            "<strong>Date:</strong> " +
+            todayString() +
+
+            "<br>" +
+
+            "<strong>Total Registered:</strong> " +
+            list.length +
+
+            "<br>" +
+
+            "<strong>Waiting:</strong> " +
+            waiting +
+
+            "<br>" +
+
+            "<strong>Currently Processing:</strong> " +
+            processing +
+
+            "<br>" +
+
+            "<strong>Completed / Harvested:</strong> " +
+            completed +
+
+            "<br>" +
+
+            "<strong>Cancelled:</strong> " +
+            cancelled;
+
+}
+
+
+/* ======================================================
+   RESET DAY
+====================================================== */
+
+function resetDay() {
+
+    const confirmed =
+        confirm(
+
+            "WARNING\n\n" +
+
+            "This will remove ALL saved product queuing data " +
+            "from this browser.\n\n" +
+
+            "Make sure you have exported or backed up " +
+            "your data first.\n\n" +
+
+            "Continue?"
+
+        );
+
+
+    if (!confirmed) {
+
+        return;
+
+    }
+
+
+    const confirmedAgain =
+        confirm(
+            "Are you absolutely sure?"
+        );
+
+
+    if (!confirmedAgain) {
+
+        return;
+
+    }
+
+
+    trucks = [];
+
+    queueNumber = 1;
+
+
+    localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify([])
+    );
+
+
+    localStorage.setItem(
+        QUEUE_KEY,
+        1
+    );
+
+
+    localStorage.setItem(
+        DATE_KEY,
+        todayString()
+    );
+
+
+    renderQueue();
+
+    updateStats();
+
+    displayCurrentTruck();
+
+    updateReport();
+
+
+    alert(
+        "May Harvest Corporation queue has been reset."
+    );
+
+}
+
+
+function updateClock() {
+  if (typeof window.updateClock === 'function' && window.updateClock !== updateClock) {
+    window.updateClock();
+  } else {
+    const cDate = document.getElementById("clockDate");
+    const cTime = document.getElementById("clockTime");
+    const now = new Date();
+    if (cDate) cDate.textContent = "📅 " + now.toDateString();
+    if (cTime) cTime.textContent = "🕒 " + now.toLocaleTimeString();
+  }
+}
+
+
+/* ======================================================
+   ESCAPE HTML
+====================================================== */
+
+function escapeHTML(value) {
+
+    if (
+        value === undefined ||
+        value === null
+    ) {
+
+        return "";
+
+    }
+
+
+    return String(value)
+
+        .replace(
+            /&/g,
+            "&amp;"
+        )
+
+        .replace(
+            /</g,
+            "&lt;"
+        )
+
+        .replace(
+            />/g,
+            "&gt;"
+        )
+
+        .replace(
+            /"/g,
+            "&quot;"
+        )
+
+        .replace(
+            /'/g,
+            "&#039;"
+        );
+
+}
+
+
+/* ======================================================
+   ACTIVITY MONITORING
+====================================================== */
+const ACTIVITY_MONITORING_KEY = "mhc_activity_monitoring_v1";
+const ACTIVITY_NAMES = [
+  "Barcode Scanning (Fresh Input)",
+  "Layering",
+  "Transfer to Blast Freezing Room",
+  "Blast Freezing",
+  "Harvesting",
+  "Barcoding / Weighing (Frozen Output)"
+];
+function getActivityRows() {
+  let rows = [];
+  try { rows = JSON.parse(localStorage.getItem(ACTIVITY_MONITORING_KEY) || "[]"); } catch(e) {}
+  return ACTIVITY_NAMES.map((name, i) => Object.assign({
+    activity:name, start:"", end:"", shift:"", manning:"", recorder:"", teamLeader:"", supervisor:"", remarks:""
+  }, rows[i] || {}, {activity:name}));
+}
+function saveActivityRows(rows) { localStorage.setItem(ACTIVITY_MONITORING_KEY, JSON.stringify(rows)); }
+function activityEscape(v) { return String(v == null ? "" : v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+function activityDuration(start, end) {
+  if (!start || !end) return "—";
+  const ms = new Date(end).getTime() - new Date(start).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const mins = Math.floor(ms / 60000);
+  return Math.floor(mins/60) + "h " + (mins%60) + "m";
+}
+function renderActivityMonitoring() {
+  const body = document.getElementById("activityMonitoringBody");
+  if (!body) return;
+  const rows = getActivityRows();
+  body.innerHTML = rows.map((r,i) => {
+    const started = !!r.start, ended = !!r.end;
+    const status = ended ? "Ended" : started ? "In progress" : "Not started";
+    const input = (key, value, placeholder="") => `<input aria-label="${activityEscape(r.activity)} ${key}" value="${activityEscape(value)}" placeholder="${placeholder}" oninput="updateActivityField(${i},'${key}',this.value)" style="width:100%;min-width:75px;box-sizing:border-box;padding:7px;border:1px solid #bfd0e2;border-radius:4px;">`;
+    return `<tr>
+      <td style="padding:10px;border:1px solid #d1deeb;font-weight:600;min-width:180px;">${activityEscape(r.activity)}</td>
+      <td style="padding:8px;border:1px solid #d1deeb;min-width:180px;"><input type="datetime-local" value="${activityEscape(r.start)}" ${started?"disabled":""} onchange="updateActivityField(${i},'start',this.value)" style="padding:7px;width:100%;box-sizing:border-box;"></td>
+      <td style="padding:8px;border:1px solid #d1deeb;min-width:180px;"><input type="datetime-local" value="${activityEscape(r.end)}" ${ended?"disabled":""} onchange="updateActivityField(${i},'end',this.value)" style="padding:7px;width:100%;box-sizing:border-box;"></td>
+      <td style="padding:8px;border:1px solid #d1deeb;white-space:nowrap;">${activityDuration(r.start,r.end)}</td>
+      <td style="padding:8px;border:1px solid #d1deeb;">—</td>
+      <td style="padding:8px;border:1px solid #d1deeb;min-width:85px;"><select onchange="updateActivityField(${i},'shift',this.value)" style="padding:7px;width:100%;"><option value="">Select</option>${["Day","Night","A","B","C","D"].map(v=>`<option ${r.shift===v?"selected":""}>${v}</option>`).join("")}</select></td>
+      <td style="padding:8px;border:1px solid #d1deeb;min-width:70px;">${input("manning",r.manning)}</td>
+      <td style="padding:8px;border:1px solid #d1deeb;min-width:130px;">${input("recorder",r.recorder)}</td>
+      <td style="padding:8px;border:1px solid #d1deeb;min-width:130px;">${input("teamLeader",r.teamLeader)}</td>
+      <td style="padding:8px;border:1px solid #d1deeb;min-width:130px;">${input("supervisor",r.supervisor)}</td>
+      <td style="padding:8px;border:1px solid #d1deeb;min-width:130px;">${input("remarks",r.remarks)}</td>
+      <td style="padding:8px;border:1px solid #d1deeb;min-width:100px;"><div style="margin-bottom:5px;">${status}</div><button type="button" onclick="stampActivity(${i},'start')" ${started?"disabled":""} style="display:block;margin-bottom:4px;padding:4px 8px;background:#316b96;color:#fff;border:0;border-radius:4px;">Start</button><button type="button" onclick="stampActivity(${i},'end')" ${ended?"disabled":""} style="display:block;padding:4px 8px;background:#526579;color:#fff;border:0;border-radius:4px;" ${started?"":"disabled"}>End</button></td>
+    </tr>`;
+  }).join("");
+}
+function updateActivityField(index, key, value) {
+  const rows=getActivityRows();
+  if ((key === "start" && rows[index].start) || (key === "end" && rows[index].end)) return;
+  rows[index][key]=value; saveActivityRows(rows);
+}
+function stampActivity(index, key) {
+  const rows=getActivityRows();
+  if (key === "start" && rows[index].start) return;
+  if (key === "end" && (!rows[index].start || rows[index].end)) return;
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset()*60000).toISOString().slice(0,16);
+  rows[index][key]=local; saveActivityRows(rows); renderActivityMonitoring();
+}
+function exportActivityMonitoring() {
+  const rows=getActivityRows();
+  const headers=["Activity","Start (date/time)","End (date/time)","Duration","Shift","Manning","Recorder","Team Leader","Supervisor","Remarks","Status"];
+  const csv=[headers,...rows.map(r=>[r.activity,r.start,r.end,activityDuration(r.start,r.end),r.shift,r.manning,r.recorder,r.teamLeader,r.supervisor,r.remarks,r.end?"Ended":r.start?"In progress":"Not started"])].map(row=>row.map(v=>'"'+String(v==null?"":v).replace(/"/g,'""')+'"').join(",")).join("\r\n");
+  const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8;"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download="MHC_Activity_Monitoring.csv"; a.click(); URL.revokeObjectURL(url);
+}
+function resetActivityMonitoring() {
+  if (!confirm("Reset all Activity Monitoring entries? This cannot be undone.")) return;
+  localStorage.removeItem(ACTIVITY_MONITORING_KEY); renderActivityMonitoring();
+}
+
+/* ======================================================
+   INITIALIZE
+====================================================== */
+
+localStorage.setItem(
+    PLANT_NAME_KEY,
+    "MAY HARVEST CORPORATION"
+);
+
+
+updateClock();
+
+renderQueue();
+
+updateStats();
+
+displayCurrentTruck();
+
+updateReport();
+
+
+/* Blast product log and inventory */
+// One-time clean test reset: clear only Blast Product Log & Inventory data and its movement history.
+// This runs once for this reset build, so later inventory entries will remain on refresh.
+const BLAST_TEST_RESET_FLAG = "mhcBlastInventoryCleanTestReset_20261029_v2";
+if (!localStorage.getItem(BLAST_TEST_RESET_FLAG)) {
+  localStorage.removeItem("mhcBlastProductInventory_v1");
+  localStorage.removeItem("mhcBlastInventoryHistory_v1");
+  localStorage.setItem(BLAST_TEST_RESET_FLAG, "done");
+}
+
+const BLAST_INVENTORY_KEY = "mhcBlastProductInventory_v1";
+// FIFO (First In, First Out): the oldest Production Date is always first. Same date -> registered earlier comes first.
+// Entries without a valid Production Date go last.
+function fifoDateKey(v) { const k = normDateStr(v); return /^\d{4}-\d{2}-\d{2}$/.test(k) ? k : "9999-99-99"; }
+function fifoSortInventory(rows) {
+  return rows.map((r, i) => ({ r, i })).sort((a, b) => {
+    const da = fifoDateKey(a.r.productionDate || a.r.date || ""), db = fifoDateKey(b.r.productionDate || b.r.date || "");
+    if (da !== db) return da < db ? -1 : 1;
+    const ca = String(a.r.createdAt || ""), cb = String(b.r.createdAt || "");
+    if (ca !== cb) return ca < cb ? -1 : 1;
+    return a.i - b.i;
+  }).map(x => x.r);
+}
+function getBlastInventory() { try { return fifoSortInventory(JSON.parse(localStorage.getItem(BLAST_INVENTORY_KEY) || "[]")); } catch (e) { return []; } }
+function saveBlastInventory(rows) { localStorage.setItem(BLAST_INVENTORY_KEY, JSON.stringify(rows)); if (typeof triggerCloudSync === "function") triggerCloudSync(); }
+const BLAST_HISTORY_KEY = "mhcBlastInventoryHistory_v1";
+function getBlastHistory() { try { return JSON.parse(localStorage.getItem(BLAST_HISTORY_KEY) || "[]"); } catch (e) { return []; } }
+function addBlastHistory(entry) { const history = getBlastHistory(); history.unshift({ timestamp: new Date().toISOString(), ...entry }); localStorage.setItem(BLAST_HISTORY_KEY, JSON.stringify(history)); }
+function formatBlastTimestamp(value) { if (!value) return "—"; const d = new Date(value); return Number.isNaN(d.getTime()) ? value : d.toLocaleString(); }
+function renderBlastHistory() {
+  const history = getBlastHistory();
+  const tbody = document.getElementById("blastInventoryHistoryRows");
+  const empty = document.getElementById("blastInventoryHistoryEmpty");
+  if (!tbody || !empty) return;
+  tbody.innerHTML = history.map(h => `<tr style="border-bottom:1px solid #e2e8f0"><td style="padding:10px;white-space:nowrap">${escapeBlastHtml(formatBlastTimestamp(h.timestamp))}</td><td style="padding:10px;font-weight:700;color:${h.type === "DEDUCTION" ? "#b45309" : "#15803d"}">${escapeBlastHtml(h.type === "DEDUCTION" ? "Stock Deducted" : "Stock Registered")}</td><td style="padding:10px">${escapeBlastHtml(h.product)}</td><td style="padding:10px">${h.type === "DEDUCTION" ? "−" : "+"}${Number(h.volume || 0).toLocaleString()} ${escapeBlastHtml(h.unit)}</td><td style="padding:10px">${Number(h.remaining ?? 0).toLocaleString()} ${escapeBlastHtml(h.unit)}</td><td style="padding:10px">${escapeBlastHtml(h.shift || h.queue || "—")}</td><td style="padding:10px">${escapeBlastHtml(h.details || "—")}</td></tr>`).join("");
+  empty.style.display = history.length ? "none" : "block";
+}
+function renderBlastInventory() {
+  const rows = getBlastInventory();
+  const tbody = document.getElementById("blastInventoryRows");
+  const empty = document.getElementById("blastInventoryEmpty");
+  if (!tbody) return;
+
+  tbody.innerHTML = rows.map((r, i) => {
+    const packsVal = Number(r.packs || 0);
+    const kgVal = Number(r.volume || 0);
+    const isNeg = packsVal < 0 || kgVal < 0;
+    let stockDisplay = "";
+    if (packsVal !== 0) {
+      const packColor = isNeg ? "#dc2626" : "#1e3a8a";
+      const kgBg = isNeg ? "#fee2e2" : "#ccfbf1";
+      const kgColor = isNeg ? "#b91c1c" : "#0f766e";
+      const badgePrefix = isNeg ? '<span style="color:#dc2626;font-size:11px;font-weight:800;display:block;margin-bottom:2px;">⚠️ NEGATIVE BALANCE</span>' : "";
+      stockDisplay = badgePrefix + `<span style="font-size:14px;font-weight:750;color:${packColor};">${packsVal.toLocaleString()} packs</span> <span style="font-size:12.5px;color:${kgColor};font-weight:650;background:${kgBg};padding:2px 8px;border-radius:4px;white-space:nowrap;margin-left:5px;">(${kgVal.toLocaleString(undefined, {minimumFractionDigits:1, maximumFractionDigits:2})} kg)</span>`;
+    } else {
+      stockDisplay = `<span style="font-weight:700;color:${isNeg ? "#dc2626" : "inherit"}">${isNeg ? "⚠️ " : ""}${kgVal.toLocaleString(undefined, {maximumFractionDigits:2})} ${escapeBlastHtml(r.unit || "kg")}</span>`;
+    }
+
+    return `<tr style="border-bottom:1px solid #e2e8f0;background:${isNeg ? "#fff5f5" : "transparent"}">
+      <td style="padding:10px">${escapeBlastHtml(r.productionDate || r.date || "—")}</td>
+      <td style="padding:10px;white-space:nowrap">${escapeBlastHtml(formatBlastTimestamp(r.createdAt))}</td>
+      <td style="padding:10px;font-weight:700">${escapeBlastHtml(r.product)}</td>
+      <td style="padding:10px">${stockDisplay}</td>
+      <td style="padding:10px"><span style="font-weight:750;padding:3px 9px;border-radius:4px;background:#fef3c7;color:#92400e;">${escapeBlastHtml(r.category || r.notes || "—")}</span></td>
+      <td style="padding:10px"><button type="button" class="btn-secondary" onclick="deleteBlastInventory(${i})">Delete</button></td>
+    </tr>`;
+  }).join("");
+  empty.style.display = rows.length ? "none" : "block";
+
+  const totalPacks = rows.reduce((sum, r) => sum + Number(r.packs || 0), 0);
+  const totalKg = rows.reduce((sum, r) => sum + Number(r.volume || 0), 0);
+
+  const summaryEl = document.getElementById("blastInventorySummary");
+  if (summaryEl) {
+    summaryEl.innerHTML = `
+      <div style="background:#eff6ff;padding:12px 16px;border-radius:8px;border:1px solid #bfdbfe">
+        <strong style="font-size:18px;color:#1e40af">${rows.length}</strong><br>
+        <span style="font-size:12px;color:#475569">Total Inventory Entries</span>
+      </div>
+      <div style="background:#f0fdf4;padding:12px 16px;border-radius:8px;border:1px solid #bbf7d0">
+        <strong style="font-size:18px;color:#166534">${totalPacks.toLocaleString()} packs</strong><br>
+        <span style="font-size:12px;color:#15803d;font-weight:600">Total Available Packs</span>
+      </div>
+      <div style="background:#ecfdf5;padding:12px 16px;border-radius:8px;border:1px solid #a7f3d0">
+        <strong style="font-size:18px;color:#065f46">${totalKg.toLocaleString(undefined, {minimumFractionDigits:1, maximumFractionDigits:2})} kg</strong><br>
+        <span style="font-size:12px;color:#047857;font-weight:600">Total Equivalent Kilos</span>
+      </div>
+    `;
+  }
+
+  // Side board: group registered remaining stock under its selected category (including CNJ).
+  const categoryGroups = {};
+  rows.forEach(r => {
+    const rawCategory = String(r.category || r.notes || "Uncategorized").trim() || "Uncategorized";
+    const category = rawCategory.toLowerCase() === "debone" ? "Deboned" : rawCategory;
+    const product = String(r.product || "Unnamed Product").trim();
+    const productionDate = String(r.productionDate || r.date || "").trim() || "—";
+    const key = product.toLowerCase() + "||" + productionDate.toLowerCase();
+    if (!categoryGroups[category]) categoryGroups[category] = {};
+    if (!categoryGroups[category][key]) categoryGroups[category][key] = { product, packs: 0, volume: 0, productionDate };
+    categoryGroups[category][key].packs += Number(r.packs || 0);
+    categoryGroups[category][key].volume += Number(r.volume || 0);
+  });
+
+  const categoryBoard = document.getElementById("blastCategoryInventoryBoard");
+  const categoryEmpty = document.getElementById("blastCategoryInventoryEmpty");
+  const categoryOrder = ["Marinated", "Timplados", "Branded", "Deboned", "Whole Chicken", "Giblets", "CNJ"];
+  const categoryNames = Object.keys(categoryGroups).sort((a,b) => {
+    const ai = categoryOrder.findIndex(name => name.toLowerCase() === a.toLowerCase());
+    const bi = categoryOrder.findIndex(name => name.toLowerCase() === b.toLowerCase());
+    if (ai !== -1 || bi !== -1) return (ai === -1 ? categoryOrder.length : ai) - (bi === -1 ? categoryOrder.length : bi);
+    return a.localeCompare(b);
+  });
+
+  if (categoryBoard) categoryBoard.innerHTML = categoryNames.map(category => {
+    const items = Object.values(categoryGroups[category]).sort((a,b) => {
+      const da = fifoDateKey(a.productionDate), db = fifoDateKey(b.productionDate);
+      if (da !== db) return da < db ? -1 : 1;
+      return a.product.localeCompare(b.product);
+    });
+    const catPacks = items.reduce((s, it) => s + (it.packs || 0), 0);
+    const catKg = items.reduce((s, it) => s + (it.volume || 0), 0);
+    const totalsText = `${catPacks > 0 ? catPacks.toLocaleString() + ' packs · ' : ''}${catKg.toLocaleString(undefined,{minimumFractionDigits:1,maximumFractionDigits:2})} kg`;
+
+    return `<div style="background:#fff;border:1px solid #fed7aa;border-radius:8px;padding:11px 12px;margin-bottom:10px">
+      <div style="font-size:13px;font-weight:900;letter-spacing:.4px;color:#c2410c;margin-bottom:8px">${escapeBlastHtml(category).toUpperCase()}</div>
+      <div style="display:grid;grid-template-columns:minmax(0,1.2fr) minmax(130px,1fr) minmax(110px,.9fr);gap:8px;padding:6px 0;font-size:11px;font-weight:800;color:#9a3412;border-bottom:1px solid #fed7aa">
+        <span>Product</span><span>Packs &amp; Kilos</span><span>Production Date</span>
+      </div>
+      ${items.map(item => `
+        <div style="display:grid;grid-template-columns:minmax(0,1.2fr) minmax(130px,1fr) minmax(110px,.9fr);gap:8px;padding:7px 0;border-bottom:1px solid #ffedd5;font-size:13px;align-items:center">
+          <span style="font-weight:700;overflow-wrap:anywhere">${escapeBlastHtml(item.product)}</span>
+          <span style="font-weight:600;overflow-wrap:anywhere">
+            ${item.packs > 0 ? `<b style="color:#1e3a8a">${item.packs.toLocaleString()} packs</b> <small style="color:#0f766e">(${item.volume.toLocaleString(undefined,{maximumFractionDigits:1})} kg)</small>` : `${item.volume.toLocaleString(undefined,{maximumFractionDigits:2})} kg`}
+          </span>
+          <span style="color:#64748b;overflow-wrap:anywhere">${escapeBlastHtml(item.productionDate)}</span>
+        </div>
+      `).join("")}
+      <div style="font-size:13px;font-weight:800;color:#7c2d12;background:#ffedd5;border-radius:6px;padding:7px 8px;margin-top:8px">Total Available: ${totalsText}</div>
+    </div>`;
+  }).join("");
+
+  if (categoryEmpty) categoryEmpty.style.display = categoryNames.length ? "none" : "block";
+  renderBlastHistory();
+  renderQueueAvailableInventory();
+}
+
+function parseQueueVolume(raw) {
+  const text = String(raw ?? "").trim().replace(/,/g, "");
+  const match = text.match(/^([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]+)?$/);
+  if (!match) return null;
+  let unit = (match[2] || "").trim();
+  if (unit) {
+    const normalized = unit.toLowerCase();
+    if (["kgs", "kilogram", "kilograms"].includes(normalized)) unit = "kg";
+    else if (["mts", "ton", "tons", "tonne", "tonnes", "metricton", "metrictons"].includes(normalized)) unit = "MT";
+    else if (["box", "boxes"].includes(normalized)) unit = "boxes";
+    else if (["case", "cases"].includes(normalized)) unit = "cases";
+    else if (["pack", "packs", "pk", "pks", "pc", "pcs"].includes(normalized)) unit = "packs";
+  }
+  return { amount: Number(match[1]), unit };
+}
+
+function applyBlastInventoryDeductions(deductions) {
+  const rows = getBlastInventory();
+  deductions.forEach(d => {
+    let remKg = Number(d.amount || 0);
+    let remPacks = Number(d.packs || 0);
+
+    const matchingRows = rows.filter(r => stockMatches(r, d.product, d.productionDate));
+
+    if (matchingRows.length > 0) {
+      // First, deduct from any matching rows with positive inventory
+      for (const row of matchingRows) {
+        if (remKg <= 0 && remPacks <= 0) break;
+
+        const currentKg = stockQty(row);
+        const currentPacks = Number(row.packs || 0);
+        if (currentKg <= 0 && currentPacks <= 0) continue;
+
+        const takeKg = Math.min(Math.max(0, currentKg), remKg);
+        const takePacks = Math.min(Math.max(0, currentPacks), remPacks);
+
+        row.volume = Math.round((currentKg - takeKg + Number.EPSILON) * 100) / 100;
+        row.packs = Math.round(currentPacks - takePacks);
+
+        remKg = Math.round((remKg - takeKg + Number.EPSILON) * 100) / 100;
+        remPacks = Math.round(remPacks - takePacks);
+      }
+
+      // If requested volume exceeds available stock, drive the last matching row into negative!
+      if (remKg > 0 || remPacks > 0) {
+        const targetRow = matchingRows[matchingRows.length - 1];
+        targetRow.volume = Math.round(((Number(targetRow.volume) || 0) - remKg + Number.EPSILON) * 100) / 100;
+        targetRow.packs = Math.round((Number(targetRow.packs) || 0) - remPacks);
+      }
+    } else {
+      // Product/Production Date does not exist in inventory at all.
+      // Stand-alone queue: Auto-create an inventory record with negative stock!
+      rows.push({
+        date: d.productionDate || todayString(),
+        productionDate: d.productionDate || todayString(),
+        product: d.product,
+        packs: -Math.round(remPacks),
+        volume: -Math.round((remKg + Number.EPSILON) * 100) / 100,
+        unit: d.unit || "kg",
+        category: "Stand-Alone Queue",
+        notes: "Stand-Alone Queue (Negative Balance)",
+        createdAt: new Date().toISOString()
+      });
+    }
+
+    const remainingStock = rows.filter(r => stockMatches(r, d.product, d.productionDate)).reduce((sum, r) => sum + stockQty(r), 0);
+    const remainingPacks = rows.filter(r => stockMatches(r, d.product, d.productionDate)).reduce((sum, r) => sum + Number(r.packs || 0), 0);
+
+    addBlastHistory({
+      type: "DEDUCTION",
+      product: d.product,
+      volume: d.amount,
+      unit: "kg",
+      packs: d.packs,
+      remaining: remainingStock,
+      remainingPacks: remainingPacks,
+      queue: (window.lastRegisteredTruck && window.lastRegisteredTruck.queue) || "New queue",
+      shift: (window.lastRegisteredTruck && window.lastRegisteredTruck.queueShift) || "",
+      details: "Queued for Blast Freezing" + (d.packs > 0 ? " (" + d.packs.toLocaleString() + " packs · " + Number(d.amount).toLocaleString(undefined,{minimumFractionDigits:1,maximumFractionDigits:2}) + " kg)" : "") +
+               (remainingPacks < 0 || remainingStock < 0 ? " [Stand-Alone / Negative Balance]" : "")
+    });
+  });
+
+  saveBlastInventory(rows);
+  renderBlastInventory();
+  renderQueueAvailableInventory();
+}
+
+function escapeBlastHtml(value) { return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+// Handle Form Submission for Blast Product Log & Inventory (Both Packs and Equivalent Kilos manually typed)
+const blastFormEl = document.getElementById("blastInventoryForm");
+if (blastFormEl) {
+  blastFormEl.addEventListener("submit", function(e) {
+    e.preventDefault();
+    const rows = getBlastInventory();
+    const packs = Number(document.getElementById("blastLogPacks").value) || 0;
+    const volume = Number(document.getElementById("blastLogVolume").value) || 0;
+    const category = document.getElementById("blastLogCategory").value;
+
+    const entry = {
+      date: document.getElementById("blastLogDate").value,
+      productionDate: document.getElementById("blastLogProductionDate").value.trim(),
+      product: document.getElementById("blastLogProduct").value.trim(),
+      packs: packs,
+      volume: volume,
+      unit: "kg",
+      category: category,
+      createdAt: new Date().toISOString()
+    };
+
+    rows.unshift(entry);
+
+    const remKg = rows.filter(r => String(r.product).toLowerCase() === entry.product.toLowerCase()).reduce((sum, r) => sum + Number(r.volume || 0), 0);
+    const remPacks = rows.filter(r => String(r.product).toLowerCase() === entry.product.toLowerCase()).reduce((sum, r) => sum + Number(r.packs || 0), 0);
+
+    addBlastHistory({
+      type: "REGISTER",
+      product: entry.product,
+      packs: entry.packs,
+      volume: entry.volume,
+      unit: "kg",
+      remaining: remKg,
+      remainingPacks: remPacks,
+      details: "Category: " + entry.category + (entry.packs > 0 ? " (" + entry.packs.toLocaleString() + " packs)" : "")
+    });
+
+    saveBlastInventory(rows);
+    this.reset();
+    document.getElementById("blastLogDate").value = new Date().toISOString().slice(0, 10);
+    renderBlastInventory();
+  });
+}
+
+function deleteBlastInventory(index) {
+  if (!confirm("Delete this inventory entry?")) return;
+  const rows = getBlastInventory();
+  const removed = rows[index];
+  rows.splice(index, 1);
+  saveBlastInventory(rows);
+  if (removed) {
+    const remKg = rows.filter(r => String(r.product).toLowerCase() === String(removed.product).toLowerCase()).reduce((sum, r) => sum + Number(r.volume || 0), 0);
+    const remPacks = rows.filter(r => String(r.product).toLowerCase() === String(removed.product).toLowerCase()).reduce((sum, r) => sum + Number(r.packs || 0), 0);
+    addBlastHistory({
+      type: "DEDUCTION",
+      product: removed.product,
+      volume: removed.volume,
+      packs: removed.packs,
+      unit: removed.unit || "kg",
+      remaining: remKg,
+      remainingPacks: remPacks,
+      shift: removed.shift,
+      details: "Inventory entry deleted manually"
+    });
+  }
+  renderBlastInventory();
+}
+
+function resetBlastInventory() {
+  if (!confirm("Reset ALL Blast Product Log & Inventory entries and clear inventory movement history? This cannot be undone. This will not delete existing queue records.")) return;
+  localStorage.removeItem(BLAST_INVENTORY_KEY);
+  localStorage.removeItem(BLAST_HISTORY_KEY);
+  renderBlastInventory();
+  alert("Blast Product Log & Inventory has been reset. You can register products again.");
+}
+
+function exportBlastInventory() {
+  const rows = getBlastInventory();
+  const headers = ["Production Date", "Registered At", "Product", "Quantity in Packs", "Equivalent Kilos (kg)", "Category"];
+  const csv = [headers, ...rows.map(r => [
+    r.productionDate || r.date,
+    formatBlastTimestamp(r.createdAt),
+    r.product,
+    r.packs ?? "",
+    r.volume ?? "",
+    r.category || r.notes || ""
+  ])].map(row => row.map(v => '"' + String(v ?? "").replace(/"/g, '""') + '"').join(",")).join("\r\n");
+
+  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "Blast_Product_Inventory.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportBlastHistory() {
+  const rows = getBlastHistory();
+  const headers = ["Date & Time", "Activity", "Product", "Packs", "Volume Change (kg)", "Remaining Packs", "Remaining Stock (kg)", "Shift", "Queue", "Details"];
+  const csv = [headers, ...rows.map(h => [
+    formatBlastTimestamp(h.timestamp),
+    h.type,
+    h.product,
+    h.packs ? ((h.type === "DEDUCTION" ? "-" : "+") + h.packs) : "",
+    (h.type === "DEDUCTION" ? "-" : "+") + Number(h.volume || 0),
+    h.remainingPacks ?? "",
+    h.remaining ?? "",
+    h.shift ?? "",
+    h.queue ?? "",
+    h.details ?? ""
+  ])].map(row => row.map(v => '"' + String(v ?? "").replace(/"/g, '""') + '"').join(",")).join("\r\n");
+
+  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "Blast_Inventory_History.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function initBlastDate() {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const todayStr = `${year}-${month}-${day}`;
+  const blastDateEl = document.getElementById("blastLogDate");
+  if (blastDateEl && !blastDateEl.value) blastDateEl.value = todayStr;
+  const blastProdDateEl = document.getElementById("blastLogProductionDate");
+  if (blastProdDateEl && !blastProdDateEl.value) blastProdDateEl.value = todayStr;
+}
+initBlastDate();
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initBlastDate);
+}
+renderBlastInventory();
+
+
+
+const BLAST_ACTIVITY_NAMES = ["Barcode Scanning (Fresh Input)", "Layering", "Transfer to Blast Freezing Room", "Blast Freezing", "Harvesting", "Barcoding Weighing (Frozen Output)"];
+let activeBlastActivityId = null;
+function getBlastActivities(truck) { if (!truck.blastActivities || !Array.isArray(truck.blastActivities)) truck.blastActivities = BLAST_ACTIVITY_NAMES.map(name => ({name,start:"",end:"",remarks:"",manning:"",recorder:"",blastSupervisor:""})); return truck.blastActivities; }
+function updateTruckTrf(truckId, value) {
+  const truck = trucks.find(t => String(t.id) === String(truckId));
+  if (!truck) return;
+  const val = String(value || '').trim();
+  if (truck.trfNumber !== val) {
+    truck.trfNumber = val;
+    saveData();
+    console.log('[MHC] Updated TRF # for queue ' + truck.queue + ': ' + val);
+  }
+}
+
+function renderBlastActivityControls(truck) {
+ const acts = getBlastActivities(truck);
+ const specs = [
+  {i:0,label:"Barcode Scanning End",endOnly:true},
+  {i:1,label:"Layering"},
+  {i:2,label:"Transfer to Blast"},
+  {i:4,label:"Harvesting"},
+  {i:5,label:"Barcode Weighing"}
+ ];
+ let html = '<div style="margin:4px 0 6px;display:flex;align-items:center;gap:6px;background:#f8fafc;padding:3px 8px;border-radius:6px;border:1px solid #cbd5e1;width:fit-content;">' +
+   '<label style="font-size:11px;font-weight:800;color:#1e293b;margin:0;">TRF #:</label>' +
+   '<input type="text" value="' + escapeHTML(truck.trfNumber || '') + '" placeholder="Type TRF #" style="height:26px;width:115px;font-size:12px;font-weight:700;padding:2px 6px;border:1px solid #94a3b8;border-radius:4px;background:#fff;color:#0f172a;" onchange="updateTruckTrf(\'' + String(truck.id) + '\', this.value)" onblur="updateTruckTrf(\'' + String(truck.id) + '\', this.value)" title="Transfer Request Form #">' +
+   '</div>';
+ html += '<div style="display:flex;flex-wrap:wrap;gap:5px;min-width:240px;margin:5px 0">';
+ for (const spec of specs) {
+  const a = acts[spec.i] || {start:"",end:""};
+  // Blast Freezing End is recorded automatically by the dashboard's Complete button,
+  // so do not render a separate manual end button for this activity.
+  if (spec.i === 3) {
+   // No separate Blast Freezing Start/End activity button: start is recorded by
+   // the dashboard's Start Blast Freezing action and end by Complete.
+   if (a.start && !a.end) html += `<span style="display:inline-flex;align-items:center;padding:8px 10px;border-radius:6px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-weight:700">Blast Freezing In Progress</span>`;
+   else if (a.end) html += `<span style="display:inline-flex;align-items:center;padding:8px 10px;border-radius:6px;background:#dcfce7;color:#166534;font-size:12px;font-weight:700">Blast Freezing Completed</span>`;
+  } else if (spec.i === 1) {
+   // Layering is manually controlled: always show Start until clicked, then swap to End.
+   if (!a.start) html += `<button type="button" class="btn-secondary" onclick="event.preventDefault();event.stopPropagation();stampBlastActivity('${String(truck.id)}',1,'start')">Layering Start</button>`;
+   else if (!a.end) html += `<button type="button" class="btn-success" onclick="event.preventDefault();event.stopPropagation();stampBlastActivity('${String(truck.id)}',1,'end')">Layering End</button>`;
+   else html += `<button type="button" class="btn-dark" disabled>Layering Ended</button>`;
+  } else if (spec.i === 4) {
+   // No manual Start here: Harvesting starts from the "Harvest Start" button after Blast Freezing is completed.
+   if (a.start && !a.end) {
+    html += `<div style="width:100%;display:flex;flex-direction:column;gap:4px;margin-top:4px"><button type="button" class="btn-warning" onclick="event.preventDefault();event.stopPropagation();stampBlastActivity('${String(truck.id)}',4,'end')">⏹ Harvest End</button><small class="harvest-live" data-start="${escapeHTML(a.start)}" style="font-weight:700;color:#b45309">Harvesting… ${blastActivityElapsed(a.start)}</small></div>`;
+   } else if (a.end) {
+    html += `<div style="width:100%;display:flex;flex-direction:column;gap:4px;margin-top:4px"><button type="button" class="btn-dark" disabled>Harvest Ended</button><small style="font-weight:700;color:#166534">Harvest Duration: ${blastActivityDuration(a.start,a.end)}</small></div>`;
+   }
+  } else if (spec.endOnly) {
+   if (a.start && !a.end) html += `<button type="button" class="btn-secondary" onclick="event.preventDefault();event.stopPropagation();stampBlastActivity('${String(truck.id)}',${spec.i},'end')">${spec.label}</button>`;
+   else if (!a.start) html += `<button type="button" class="btn-secondary" disabled title="Barcode Scanning is recorded automatically when Layering Start is clicked">Barcode Scanning</button>`;
+  } else if (!a.start) {
+   html += `<button type="button" class="btn-secondary" onclick="event.preventDefault();event.stopPropagation();stampBlastActivity('${String(truck.id)}',${spec.i},'start')">${spec.label} Start</button>`;
+  } else if (!a.end) {
+   const endLabel = spec.i === 5 ? 'Barcode Weighing End' : `${spec.label} End`;
+   html += `<button type="button" class="btn-success" onclick="event.preventDefault();event.stopPropagation();stampBlastActivity('${String(truck.id)}',${spec.i},'end')">${endLabel}</button>`;
+  } else {
+   html += `<button type="button" class="btn-dark" disabled>${spec.i === 5 ? 'Barcode Weighing Ended' : spec.label + ' Ended'}</button>`;
+  }
+ }
+ return html + '</div>';
+}
+function blastActivityElapsed(start){const ms=Date.now()-new Date(start).getTime();if(!Number.isFinite(ms)||ms<0)return "0h 0m";const m=Math.floor(ms/60000);return Math.floor(m/60)+"h "+(m%60)+"m";}
+setInterval(function(){document.querySelectorAll(".harvest-live").forEach(function(el){el.textContent="Harvesting… "+blastActivityElapsed(el.getAttribute("data-start"));});},15000);
+function stampBlastActivity(truckId, activityIndex, side) {
+ const truck = trucks.find(t => String(t.id) === String(truckId)); if (!truck) { alert("Could not find this queue. Please refresh the dashboard and try again."); return; }
+ const acts = getBlastActivities(truck); const a = acts[activityIndex]; if (!a) return;
+ const now = new Date(); const localNow = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0,16);
+ if (side === 'start') {
+  if (a.start) { alert(`${a.name} has already started.`); return; }
+  a.start = localNow;
+  // Layering Start also records the Barcode Scanning time (same timestamp).
+  if (activityIndex === 1 && acts[0] && !acts[0].start) acts[0].start = localNow;
+ } else {
+  if (!a.start) { alert(`Please start ${a.name} first.`); return; }
+  if (a.end) { alert(`${a.name} has already ended.`); return; }
+  a.end = localNow;
+  if (activityIndex === 4) { truck.harvestEndTimestamp = now.toISOString(); truck.harvestEndTime = now.toLocaleTimeString(); }
+ }
+ saveData(); renderQueue(); updateStats(); displayCurrentTruck();
+ if (typeof renderLiveBlastBoard === 'function') renderLiveBlastBoard();
+}
+function openBlastActivity(id) {
+ const truck = trucks.find(t => t.id === id); if (!truck) return; activeBlastActivityId = id;
+ document.getElementById("blastActivityQueueLabel").textContent = `Queue ${truck.queue || "-"} · TRF #: ${truck.trfNumber || "—"} · ${truck.product || truck.loadType || "Product"} · ${truck.assignedBlast || "Not assigned"}`;
+ const activities = getBlastActivities(truck);
+ document.getElementById("blastActivityRows").innerHTML = activities.map((a,i)=>`<tr><td style="min-width:160px;font-weight:700">${escapeHTML(a.name || BLAST_ACTIVITY_NAMES[i])}</td><td><input type="datetime-local" id="blastActStart_${i}" value="${escapeHTML(a.start||"")}" style="min-width:180px" disabled title="Timestamp is recorded automatically and cannot be edited"></td><td><input type="datetime-local" id="blastActEnd_${i}" value="${escapeHTML(a.end||"")}" style="min-width:180px" disabled title="Timestamp is recorded automatically and cannot be edited"></td><td id="blastActDuration_${i}" style="min-width:75px">${blastActivityDuration(a.start,a.end)}</td><td><input id="blastActRemarks_${i}" value="${escapeHTML(a.remarks||"")}" style="min-width:120px"></td><td><input id="blastActManning_${i}" value="${escapeHTML(a.manning||"")}" style="min-width:100px"></td><td><input id="blastActRecorder_${i}" value="${escapeHTML(a.recorder||"")}" style="min-width:140px"></td><td><input id="blastActSupervisor_${i}" value="${escapeHTML(a.blastSupervisor||"")}" style="min-width:140px" placeholder="Blast Supervisor"></td></tr>`).join("");
+ BLAST_ACTIVITY_NAMES.forEach((_,i)=>["Start","End"].forEach(side=>document.getElementById(`blastAct${side}_${i}`).addEventListener("change",()=>{document.getElementById(`blastActDuration_${i}`).textContent=blastActivityDuration(document.getElementById(`blastActStart_${i}`).value,document.getElementById(`blastActEnd_${i}`).value);} )));
+ document.getElementById("blastActivityModal").style.display="block";
+}
+function closeBlastActivity(){document.getElementById("blastActivityModal").style.display="none";activeBlastActivityId=null;}
+function blastActivityDuration(start,end){if(!start||!end)return "-";const ms=new Date(end)-new Date(start);if(ms<0)return "Check time";const mins=Math.floor(ms/60000);return `${Math.floor(mins/60)}h ${mins%60}m`;}
+/* ---------- Activity Duration Report (CSV) ---------- */
+function blastActivityMinutes(start,end){if(!start||!end)return null;const ms=new Date(end)-new Date(start);if(!Number.isFinite(ms)||ms<0)return null;return Math.floor(ms/60000);}
+function fmtActMins(m){return m===null?"":Math.floor(m/60)+"h "+(m%60)+"m";}
+function fmtActStamp(v){if(!v)return "";const d=new Date(v);return Number.isNaN(d.getTime())?v:d.toLocaleString();}
+function blastActivityReportRows(truck){
+ const acts=getBlastActivities(truck);
+ const rows=[];let total=0;
+ BLAST_ACTIVITY_NAMES.forEach((name,i)=>{
+  const a=acts[i]||{};const mins=blastActivityMinutes(a.start,a.end);
+  if(mins!==null)total+=mins;
+  const status=a.end?"Ended":a.start?"In progress":"Not started";
+  rows.push([truck.queue||"",truck.product||truck.loadType||"",truck.volume||"",truck.assignedBlast||"",truck.queueDate||truck.date||"",truck.queueShift||"",
+   name,fmtActStamp(a.start),fmtActStamp(a.end),fmtActMins(mins),mins===null?"":mins,status,a.manning||"",a.recorder||"",a.blastSupervisor||"",a.remarks||""]);
+ });
+ return {rows,total};
+}
+const BLAST_ACT_REPORT_HEADERS=["Queue","Product","Volume","Blast Freezer","Queue Date","Shift","Activity","Start Date & Time","End Date & Time","Duration","Duration (minutes)","Status","Manning","Recorder / Team Leader","Blast Supervisor","Remarks"];
+function blastActCsv(rows){return "\ufeff"+rows.map(r=>r.map(v=>'"'+String(v==null?"":v).replace(/"/g,'""')+'"').join(",")).join("\r\n");}
+function downloadBlastActivityReport(){
+ const truck=trucks.find(t=>t.id===activeBlastActivityId);
+ if(!truck){alert("Could not find this queue.");return;}
+ const {rows,total}=blastActivityReportRows(truck);
+ const blank=new Array(BLAST_ACT_REPORT_HEADERS.length).fill("");
+ const totalRow=blank.slice();totalRow[6]="TOTAL ACTIVITY DURATION";totalRow[9]=fmtActMins(total);totalRow[10]=total;
+ const csv=blastActCsv([BLAST_ACT_REPORT_HEADERS,...rows,totalRow]);
+ downloadFile(csv,"MHC_Activity_Report_"+(truck.queue||"queue")+"_"+todayString()+".csv","text/csv;charset=utf-8;");
+}
+function exportAllBlastActivityReport(){
+ const list=todaysTrucks();
+ if(!list.length){alert("There is no queue data to export for today.");return;}
+ const all=[BLAST_ACT_REPORT_HEADERS];const blank=new Array(BLAST_ACT_REPORT_HEADERS.length).fill("");
+ list.forEach(truck=>{
+  const {rows,total}=blastActivityReportRows(truck);
+  all.push(...rows);
+  const t=blank.slice();t[0]=truck.queue||"";t[6]="TOTAL ACTIVITY DURATION";t[9]=fmtActMins(total);t[10]=total;all.push(t);
+  all.push(blank.slice());
+ });
+ downloadFile(blastActCsv(all),"MHC_Activity_Duration_Report_"+todayString()+".csv","text/csv;charset=utf-8;");
+}
+function saveBlastActivity(){const truck=trucks.find(t=>t.id===activeBlastActivityId);if(!truck)return;const existing=getBlastActivities(truck);truck.blastActivities=BLAST_ACTIVITY_NAMES.map((name,i)=>({name,start:existing[i]?.start||"",end:existing[i]?.end||"",remarks:document.getElementById(`blastActRemarks_${i}`).value.trim(),manning:document.getElementById(`blastActManning_${i}`).value.trim(),recorder:document.getElementById(`blastActRecorder_${i}`).value.trim(),blastSupervisor:document.getElementById(`blastActSupervisor_${i}`).value.trim()}));saveData();renderQueue();renderLiveBlastBoard();closeBlastActivity();alert("Blast activity log saved. Start/end timestamps are locked and cannot be edited.");}
+function renderTVActivitySummary(truck){const acts=Array.isArray(truck.blastActivities)?truck.blastActivities:[];const filled=acts.filter(a=>a.start||a.end||a.remarks||a.manning||a.recorder||a.blastSupervisor);if(!filled.length)return "";return `<div style="margin-top:8px;padding:8px;background:#172554;border-radius:8px"><strong style="color:#bfdbfe">ACTIVITY LOG</strong>${filled.map(a=>`<small style="display:block;color:#e2e8f0;margin-top:4px">${escapeHTML(a.name)} · Start: ${escapeHTML(a.start ? new Date(a.start).toLocaleString() : "-")} · End: ${escapeHTML(a.end ? new Date(a.end).toLocaleString() : "-")} · Duration: ${escapeHTML(blastActivityDuration(a.start,a.end))}${a.remarks ? " · Remarks: "+escapeHTML(a.remarks):""}${a.manning ? " · Manning: "+escapeHTML(a.manning):""}${a.recorder ? " · Recorder: "+escapeHTML(a.recorder):""}${a.blastSupervisor ? " · Blast Supervisor: "+escapeHTML(a.blastSupervisor):""}</small>`).join("")}</div>`;}
+</script>
+
+
+
+
+</body>
+
 </html>
